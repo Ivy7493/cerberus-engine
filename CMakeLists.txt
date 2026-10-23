@@ -85,6 +85,7 @@ add_library(eng STATIC
     src/net/UdpTransport.cpp
     src/net/SteamPlatform.cpp
     src/net/SteamTransport.cpp
+    src/net/LagTransport.cpp
     ${imgui_SOURCE_DIR}/imgui.cpp
     ${imgui_SOURCE_DIR}/imgui_draw.cpp
     ${imgui_SOURCE_DIR}/imgui_tables.cpp
