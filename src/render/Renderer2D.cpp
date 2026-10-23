@@ -418,7 +418,24 @@ void Renderer2D::createBuiltinTextures() {
         }
     }
     TextureId c = createTexture(disc.data(), kSize, kSize);
-    if (w != kWhite || c != kCircle) throw std::logic_error("builtin texture ids out of order");
+
+    // Glow: smooth falloff to zero at the rim, so even hugely magnified with
+    // nearest filtering there's no visible edge.
+    constexpr int kGlowSize = 128;
+    std::vector<uint8_t> glow(kGlowSize * kGlowSize * 4);
+    for (int y = 0; y < kGlowSize; ++y) {
+        for (int x = 0; x < kGlowSize; ++x) {
+            float dx = (x + 0.5f) / kGlowSize * 2.0f - 1.0f;
+            float dy = (y + 0.5f) / kGlowSize * 2.0f - 1.0f;
+            float d = std::min(1.0f, std::sqrt(dx * dx + dy * dy));
+            float a = (1.0f - d) * (1.0f - d);
+            uint8_t* p = &glow[(y * kGlowSize + x) * 4];
+            p[0] = p[1] = p[2] = 255;
+            p[3] = static_cast<uint8_t>(a * 255.0f);
+        }
+    }
+    TextureId g = createTexture(glow.data(), kGlowSize, kGlowSize);
+    if (w != kWhite || c != kCircle || g != kGlow) throw std::logic_error("builtin texture ids out of order");
 }
 
 // ── UI scale ─────────────────────────────────────────────────────────────────
@@ -543,6 +560,17 @@ void Renderer2D::drawCircle(const glm::vec2& center, float radius, const glm::ve
     s.color = color;
     s.space = space;
     s.blend = blend;
+    draw(s);
+}
+
+void Renderer2D::drawGlow(const glm::vec2& center, float radius, const glm::vec4& color, Space space) {
+    Sprite s;
+    s.texture = kGlow;
+    s.pos = center;
+    s.size = glm::vec2(radius * 2.0f);
+    s.color = color;
+    s.space = space;
+    s.blend = BlendMode::Additive;
     draw(s);
 }
 

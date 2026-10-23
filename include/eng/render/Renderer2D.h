@@ -62,6 +62,7 @@ public:
     // Built-in textures, always present.
     static constexpr TextureId kWhite = 0;   // 1x1 white
     static constexpr TextureId kCircle = 1;  // soft-edged white disc
+    static constexpr TextureId kGlow = 2;    // radial falloff, for big additive glows (smooth when magnified)
 
     Renderer2D(Window& window, const Options& options);
     ~Renderer2D();
@@ -98,6 +99,8 @@ public:
                   Space space = Space::World);
     void drawCircle(const glm::vec2& center, float radius, const glm::vec4& color,
                     Space space = Space::World, BlendMode blend = BlendMode::Alpha);
+    // Soft radial glow (kGlow), additive.
+    void drawGlow(const glm::vec2& center, float radius, const glm::vec4& color, Space space = Space::World);
     void drawLine(const glm::vec2& a, const glm::vec2& b, float thickness, const glm::vec4& color,
                   Space space = Space::World, BlendMode blend = BlendMode::Alpha);
 
