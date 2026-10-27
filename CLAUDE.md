@@ -27,6 +27,8 @@ No standalone build or tests — it's built and exercised through a game (`../de
   - UNORM swapchain (not sRGB) so pixel-art colors and ImGui pass through untouched.
   - `beginFrame()` returns false while minimized instead of blocking — a host's simulation must keep ticking.
   - `requestScreenshot(path)` reads back the next presented frame to PNG (stb_image_write).
+  - Blend modes: Alpha, Additive, Modulate2x (dst × src × 2 — 0.5 grey is neutral). `drawTriangle` for fans/polygons (a quad with a degenerate second triangle, so it batches with sprites).
+  - **Lighting**: a half-resolution, linearly-filtered lightmap (one per frame in flight, `R8G8B8A8_UNORM`, its own render pass recorded before the main one). `beginLights(ambient)` … `endLights()` routes every draw into the lightmap's batch list (same vertex buffer); `compositeLights()` puts a Modulate2x screen quad of it into the scene stream at that point, so what's drawn before is lit and what's after isn't. Frames that never composite skip the pass. The lightmap images are recreated with the swapchain; their texture slots keep their ids. Shadow geometry is the game's job (Delve: `client/Lighting.cpp`).
 - `audio/` — `Audio` (miniaudio): named one-shots with N voices, one streamed music track; silent no-op if the device or file is missing.
 - `net/`
   - `Transport` interface: message-oriented, `send(peer, bytes, Reliable|Unreliable)`, `poll()` → Data/Disconnected events, `pingMs`. No accept step — the game protocol decides who's in.

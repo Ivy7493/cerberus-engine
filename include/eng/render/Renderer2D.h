@@ -22,7 +22,9 @@ class Swapchain;
 
 using TextureId = uint32_t;
 
-enum class BlendMode : uint8_t { Alpha, Additive };
+// Modulate2x: dst × src × 2, so mid-grey (0.5) leaves what's under it as it
+// was, darker greys darken and lighter ones brighten (up to double).
+enum class BlendMode : uint8_t { Alpha, Additive, Modulate2x };
 enum class Space : uint8_t { World, Screen };
 
 // One textured, tinted, optionally rotated quad. `pos` is the quad's center.
@@ -103,6 +105,20 @@ public:
     void drawGlow(const glm::vec2& center, float radius, const glm::vec4& color, Space space = Space::World);
     void drawLine(const glm::vec2& a, const glm::vec2& b, float thickness, const glm::vec4& color,
                   Space space = Space::World, BlendMode blend = BlendMode::Alpha);
+    // One textured triangle (`uv` per corner), for fans and arbitrary polygons.
+    void drawTriangle(const glm::vec2 (&p)[3], const glm::vec2 (&uv)[3], const glm::vec4& color,
+                      TextureId texture = kWhite, Space space = Space::World, BlendMode blend = BlendMode::Alpha);
+
+    // ── Lighting ──
+    // A screen-covering lightmap (half resolution, linearly filtered),
+    // cleared to `ambient` each frame. Between beginLights() and endLights()
+    // every draw*() goes into the lightmap instead of the scene — Additive is
+    // what lights want. compositeLights() then Modulate2x's the lightmap over
+    // everything drawn so far (ambient 0.5 = unchanged); whatever is drawn
+    // after it stays unlit. A frame that never composites skips the pass.
+    void beginLights(const glm::vec4& ambient);
+    void endLights();
+    void compositeLights();
 
     ImFont* titleFont() const { return m_titleFont; }
     // Pixel size the title font renders at right now (font size x UI scale).
@@ -140,6 +156,15 @@ private:
         VkDescriptorSet descriptor = VK_NULL_HANDLE;
         uint32_t width = 0, height = 0;
     };
+    // One per frame in flight, so a frame never draws into the lightmap the
+    // previous one may still be sampling.
+    struct Lightmap {
+        VkImage image = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkImageView view = VK_NULL_HANDLE;
+        VkFramebuffer framebuffer = VK_NULL_HANDLE;
+        TextureId texture = 0;  // its m_textures slot (descriptor only; resources live here)
+    };
     struct FrameResources {
         VkCommandBuffer cmd = VK_NULL_HANDLE;
         VkSemaphore imageAvailable = VK_NULL_HANDLE;
@@ -150,12 +175,17 @@ private:
     };
 
     static constexpr int kFramesInFlight = 2;
-    static constexpr uint32_t kMaxSprites = 32768;
+    static constexpr uint32_t kMaxSprites = 65536;  // lights' shadow fans take a share
 
     void createRenderPass();
     void createFramebuffers();
     void destroyFramebuffers();
     void createPipelines();
+    VkPipeline createPipeline(VkRenderPass pass, BlendMode blend);
+    void createLightmaps();
+    void destroyLightmaps();
+    void pushVertices(const Vertex* v, TextureId texture, BlendMode blend, Space space);
+    void recordBatches(VkCommandBuffer cmd, const std::vector<Batch>& batches, bool lightPass);
     void createFrameResources();
     void createIndexBuffer();
     void initImGui(const Options& options);
@@ -177,6 +207,20 @@ private:
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
     VkPipeline m_pipelineAlpha = VK_NULL_HANDLE;
     VkPipeline m_pipelineAdditive = VK_NULL_HANDLE;
+    VkPipeline m_pipelineModulate = VK_NULL_HANDLE;
+    VkShaderModule m_vertModule = VK_NULL_HANDLE;
+    VkShaderModule m_fragModule = VK_NULL_HANDLE;
+
+    VkRenderPass m_lightPass = VK_NULL_HANDLE;
+    VkPipeline m_lightPipelineAlpha = VK_NULL_HANDLE;
+    VkPipeline m_lightPipelineAdditive = VK_NULL_HANDLE;
+    VkSampler m_lightSampler = VK_NULL_HANDLE;
+    std::array<Lightmap, kFramesInFlight> m_lightmaps{};
+    VkExtent2D m_lightExtent{1, 1};
+    std::vector<Batch> m_lightBatches;
+    glm::vec4 m_lightAmbient{0.5f};
+    bool m_inLights = false;
+    bool m_lightsUsed = false;
     VkDescriptorPool m_imguiPool = VK_NULL_HANDLE;
     VkBuffer m_indexBuffer = VK_NULL_HANDLE;
     VkDeviceMemory m_indexMemory = VK_NULL_HANDLE;

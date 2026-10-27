@@ -31,6 +31,8 @@ const uint32_t kSpriteFragSpv[] =
 #include "sprite.frag.inc"
     ;
 
+constexpr VkFormat kLightmapFormat = VK_FORMAT_R8G8B8A8_UNORM;
+
 struct PushConstants {
     glm::vec2 scale;
     glm::vec2 offset;
@@ -68,6 +70,7 @@ Renderer2D::Renderer2D(Window& window, const Options& options) : m_window(window
     createIndexBuffer();
     initImGui(options);
     createBuiltinTextures();
+    createLightmaps();  // after ImGui (its descriptor sets) and the builtins (fixed ids)
 
     m_vertices.reserve(kMaxSprites * 4);
 }
@@ -76,8 +79,9 @@ Renderer2D::~Renderer2D() {
     VkDevice dev = m_context->device();
     vkDeviceWaitIdle(dev);
 
+    destroyLightmaps();
     for (auto& tex : m_textures) {
-        ImGui_ImplVulkan_RemoveTexture(tex.descriptor);
+        if (tex.descriptor) ImGui_ImplVulkan_RemoveTexture(tex.descriptor);
         vkutil::destroyTexture(*m_context, tex.res);
     }
     ImGui_ImplVulkan_Shutdown();
@@ -95,6 +99,11 @@ Renderer2D::~Renderer2D() {
     vkFreeMemory(dev, m_indexMemory, nullptr);
     vkDestroyPipeline(dev, m_pipelineAlpha, nullptr);
     vkDestroyPipeline(dev, m_pipelineAdditive, nullptr);
+    vkDestroyPipeline(dev, m_pipelineModulate, nullptr);
+    vkDestroyPipeline(dev, m_lightPipelineAlpha, nullptr);
+    vkDestroyPipeline(dev, m_lightPipelineAdditive, nullptr);
+    vkDestroySampler(dev, m_lightSampler, nullptr);
+    vkDestroyRenderPass(dev, m_lightPass, nullptr);
     vkDestroyPipelineLayout(dev, m_pipelineLayout, nullptr);
     vkDestroyDescriptorSetLayout(dev, m_textureSetLayout, nullptr);
     destroyFramebuffers();
@@ -140,6 +149,28 @@ void Renderer2D::createRenderPass() {
     info.pDependencies = &dep;
     if (vkCreateRenderPass(m_context->device(), &info, nullptr, &m_renderPass) != VK_SUCCESS)
         throw std::runtime_error("failed to create render pass");
+
+    // The lightmap pass: cleared to the ambient, left ready for the main
+    // pass's composite to sample.
+    color.format = kLightmapFormat;
+    color.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkSubpassDependency deps[2]{};
+    deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    deps[0].dstSubpass = 0;
+    deps[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    deps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    deps[1].srcSubpass = 0;
+    deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    deps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    deps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    info.dependencyCount = 2;
+    info.pDependencies = deps;
+    if (vkCreateRenderPass(m_context->device(), &info, nullptr, &m_lightPass) != VK_SUCCESS)
+        throw std::runtime_error("failed to create lightmap render pass");
 }
 
 void Renderer2D::createFramebuffers() {
@@ -204,19 +235,28 @@ void Renderer2D::createPipelines() {
     if (vkCreatePipelineLayout(dev, &layoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS)
         throw std::runtime_error("failed to create pipeline layout");
 
-    VkShaderModule vert = createShaderModule(dev, kSpriteVertSpv, sizeof(kSpriteVertSpv));
-    VkShaderModule frag = createShaderModule(dev, kSpriteFragSpv, sizeof(kSpriteFragSpv));
+    m_vertModule = createShaderModule(dev, kSpriteVertSpv, sizeof(kSpriteVertSpv));
+    m_fragModule = createShaderModule(dev, kSpriteFragSpv, sizeof(kSpriteFragSpv));
+    m_pipelineAlpha = createPipeline(m_renderPass, BlendMode::Alpha);
+    m_pipelineAdditive = createPipeline(m_renderPass, BlendMode::Additive);
+    m_pipelineModulate = createPipeline(m_renderPass, BlendMode::Modulate2x);
+    m_lightPipelineAlpha = createPipeline(m_lightPass, BlendMode::Alpha);
+    m_lightPipelineAdditive = createPipeline(m_lightPass, BlendMode::Additive);
+    vkDestroyShaderModule(dev, m_vertModule, nullptr);
+    vkDestroyShaderModule(dev, m_fragModule, nullptr);
+    m_vertModule = m_fragModule = VK_NULL_HANDLE;
+}
 
+VkPipeline Renderer2D::createPipeline(VkRenderPass pass, BlendMode blendMode) {
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-    stages[0].module = vert;
+    stages[0].module = m_vertModule;
     stages[0].pName = "main";
     stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    stages[1].module = frag;
+    stages[1].module = m_fragModule;
     stages[1].pName = "main";
-
     VkVertexInputBindingDescription vbind{0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX};
     VkVertexInputAttributeDescription attrs[3] = {
         {0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, pos)},
@@ -259,6 +299,15 @@ void Renderer2D::createPipelines() {
     blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     blend.alphaBlendOp = VK_BLEND_OP_ADD;
+    if (blendMode == BlendMode::Additive) {
+        blend.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    } else if (blendMode == BlendMode::Modulate2x) {  // src·dst + dst·src
+        blend.srcColorBlendFactor = VK_BLEND_FACTOR_DST_COLOR;
+        blend.dstColorBlendFactor = VK_BLEND_FACTOR_SRC_COLOR;
+        blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    }
     VkPipelineColorBlendStateCreateInfo blendState{};
     blendState.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     blendState.attachmentCount = 1;
@@ -282,19 +331,77 @@ void Renderer2D::createPipelines() {
     info.pColorBlendState = &blendState;
     info.pDynamicState = &dynamic;
     info.layout = m_pipelineLayout;
-    info.renderPass = m_renderPass;
+    info.renderPass = pass;
     info.subpass = 0;
 
-    if (vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1, &info, nullptr, &m_pipelineAlpha) != VK_SUCCESS)
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    if (vkCreateGraphicsPipelines(m_context->device(), VK_NULL_HANDLE, 1, &info, nullptr, &pipeline) != VK_SUCCESS)
         throw std::runtime_error("failed to create sprite pipeline");
+    return pipeline;
+}
 
-    blend.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
-    blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-    if (vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1, &info, nullptr, &m_pipelineAdditive) != VK_SUCCESS)
-        throw std::runtime_error("failed to create additive sprite pipeline");
+void Renderer2D::createLightmaps() {
+    VkDevice dev = m_context->device();
+    if (!m_lightSampler) {
+        // Linear, unlike sprite textures: the half-resolution lightmap is
+        // stretched over the screen and should read as smooth light.
+        VkSamplerCreateInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        si.magFilter = si.minFilter = VK_FILTER_LINEAR;
+        si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.maxLod = 0.0f;
+        if (vkCreateSampler(dev, &si, nullptr, &m_lightSampler) != VK_SUCCESS)
+            throw std::runtime_error("failed to create lightmap sampler");
+    }
+    VkExtent2D e = m_swapchain->extent();
+    m_lightExtent = {std::max(1u, e.width / 2), std::max(1u, e.height / 2)};
+    for (Lightmap& lm : m_lightmaps) {
+        vkutil::createImage(*m_context, m_lightExtent.width, m_lightExtent.height, kLightmapFormat, VK_IMAGE_TILING_OPTIMAL,
+                            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, lm.image, lm.memory);
+        lm.view = vkutil::createImageView(*m_context, lm.image, kLightmapFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+        VkFramebufferCreateInfo fb{};
+        fb.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        fb.renderPass = m_lightPass;
+        fb.attachmentCount = 1;
+        fb.pAttachments = &lm.view;
+        fb.width = m_lightExtent.width;
+        fb.height = m_lightExtent.height;
+        fb.layers = 1;
+        if (vkCreateFramebuffer(dev, &fb, nullptr, &lm.framebuffer) != VK_SUCCESS)
+            throw std::runtime_error("failed to create lightmap framebuffer");
+        // A texture slot like any other, so the composite is an ordinary
+        // sprite batch. Resources are owned here; the slot only holds the set.
+        Texture tex;
+        tex.descriptor = ImGui_ImplVulkan_AddTexture(m_lightSampler, lm.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        tex.width = m_lightExtent.width;
+        tex.height = m_lightExtent.height;
+        if (lm.texture) {
+            m_textures[lm.texture] = tex;
+        } else {
+            m_textures.push_back(tex);
+            lm.texture = static_cast<TextureId>(m_textures.size() - 1);
+        }
+    }
+}
 
-    vkDestroyShaderModule(dev, vert, nullptr);
-    vkDestroyShaderModule(dev, frag, nullptr);
+void Renderer2D::destroyLightmaps() {
+    VkDevice dev = m_context->device();
+    for (Lightmap& lm : m_lightmaps) {
+        if (lm.texture && m_textures[lm.texture].descriptor) {
+            ImGui_ImplVulkan_RemoveTexture(m_textures[lm.texture].descriptor);
+            m_textures[lm.texture].descriptor = VK_NULL_HANDLE;
+        }
+        if (lm.framebuffer) vkDestroyFramebuffer(dev, lm.framebuffer, nullptr);
+        if (lm.view) vkDestroyImageView(dev, lm.view, nullptr);
+        if (lm.image) vkDestroyImage(dev, lm.image, nullptr);
+        if (lm.memory) vkFreeMemory(dev, lm.memory, nullptr);
+        lm.framebuffer = VK_NULL_HANDLE;
+        lm.view = VK_NULL_HANDLE;
+        lm.image = VK_NULL_HANDLE;
+        lm.memory = VK_NULL_HANDLE;
+    }
 }
 
 void Renderer2D::createFrameResources() {
@@ -527,19 +634,36 @@ void Renderer2D::draw(const Sprite& s) {
         for (auto& p : corners) p = {p.x * c - p.y * sn, p.x * sn + p.y * c};
     }
     glm::vec2 uvs[4] = {{s.uv.x, s.uv.y}, {s.uv.z, s.uv.y}, {s.uv.z, s.uv.w}, {s.uv.x, s.uv.w}};
+    Vertex v[4];
+    for (int i = 0; i < 4; ++i) v[i] = {s.pos + corners[i], uvs[i], s.color};
+    pushVertices(v, s.texture, s.blend, s.space);
+}
 
+// One quad's worth of vertices onto the scene's or (between beginLights and
+// endLights) the lightmap's batch list; both index the same vertex buffer.
+void Renderer2D::pushVertices(const Vertex* v, TextureId texture, BlendMode blend, Space space) {
     auto firstIndex = static_cast<uint32_t>(m_vertices.size() / 4 * 6);
-    for (int i = 0; i < 4; ++i) m_vertices.push_back({s.pos + corners[i], uvs[i], s.color});
+    m_vertices.insert(m_vertices.end(), v, v + 4);
 
-    TextureId tex = s.texture < m_textures.size() ? s.texture : kWhite;
-    if (!m_batches.empty()) {
-        Batch& last = m_batches.back();
-        if (last.texture == tex && last.blend == s.blend && last.space == s.space) {
+    TextureId tex = texture < m_textures.size() ? texture : kWhite;
+    std::vector<Batch>& batches = m_inLights ? m_lightBatches : m_batches;
+    if (!batches.empty()) {
+        Batch& last = batches.back();
+        if (last.texture == tex && last.blend == blend && last.space == space &&
+            last.firstIndex + last.indexCount == firstIndex) {
             last.indexCount += 6;
             return;
         }
     }
-    m_batches.push_back({tex, s.blend, s.space, firstIndex, 6});
+    batches.push_back({tex, blend, space, firstIndex, 6});
+}
+
+void Renderer2D::drawTriangle(const glm::vec2 (&p)[3], const glm::vec2 (&uv)[3], const glm::vec4& color,
+                              TextureId texture, Space space, BlendMode blend) {
+    if (m_vertices.size() + 4 > kMaxSprites * 4) return;
+    // A quad whose second triangle (c, c, a) is degenerate.
+    Vertex v[4] = {{p[0], uv[0], color}, {p[1], uv[1], color}, {p[2], uv[2], color}, {p[2], uv[2], color}};
+    pushVertices(v, texture, blend, space);
 }
 
 void Renderer2D::drawRect(const glm::vec2& center, const glm::vec2& size, const glm::vec4& color, Space space) {
@@ -589,13 +713,36 @@ void Renderer2D::drawLine(const glm::vec2& a, const glm::vec2& b, float thicknes
     draw(s);
 }
 
+// ── Lighting ─────────────────────────────────────────────────────────────────
+
+void Renderer2D::beginLights(const glm::vec4& ambient) {
+    m_lightAmbient = ambient;
+    m_inLights = true;
+}
+
+void Renderer2D::endLights() { m_inLights = false; }
+
+void Renderer2D::compositeLights() {
+    m_inLights = false;
+    m_lightsUsed = true;
+    Sprite s;
+    s.texture = m_lightmaps[m_frameIndex].texture;
+    s.pos = screenSize() * 0.5f;
+    s.size = screenSize();
+    s.blend = BlendMode::Modulate2x;
+    s.space = Space::Screen;
+    draw(s);
+}
+
 // ── Frame ────────────────────────────────────────────────────────────────────
 
 void Renderer2D::recreateSwapchain() {
     vkDeviceWaitIdle(m_context->device());
     destroyFramebuffers();
+    destroyLightmaps();
     m_swapchain->recreate();
     createFramebuffers();
+    createLightmaps();
     ImGui_ImplVulkan_SetMinImageCount(kFramesInFlight);
 }
 
@@ -621,6 +768,9 @@ bool Renderer2D::beginFrame() {
 
     m_vertices.clear();
     m_batches.clear();
+    m_lightBatches.clear();
+    m_inLights = false;
+    m_lightsUsed = false;
 
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
@@ -644,6 +794,27 @@ void Renderer2D::endFrame() {
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &begin);
 
+    // The lightmap first, so the main pass can composite it.
+    if (m_lightsUsed) {
+        const Lightmap& lm = m_lightmaps[m_frameIndex];
+        VkClearValue ambient{};
+        ambient.color = {{m_lightAmbient.r, m_lightAmbient.g, m_lightAmbient.b, m_lightAmbient.a}};
+        VkRenderPassBeginInfo lp{};
+        lp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        lp.renderPass = m_lightPass;
+        lp.framebuffer = lm.framebuffer;
+        lp.renderArea.extent = m_lightExtent;
+        lp.clearValueCount = 1;
+        lp.pClearValues = &ambient;
+        vkCmdBeginRenderPass(cmd, &lp, VK_SUBPASS_CONTENTS_INLINE);
+        VkViewport lvp{0.0f, 0.0f, float(m_lightExtent.width), float(m_lightExtent.height), 0.0f, 1.0f};
+        VkRect2D lscissor{{0, 0}, m_lightExtent};
+        vkCmdSetViewport(cmd, 0, 1, &lvp);
+        vkCmdSetScissor(cmd, 0, 1, &lscissor);
+        recordBatches(cmd, m_lightBatches, /*lightPass=*/true);
+        vkCmdEndRenderPass(cmd);
+    }
+
     VkExtent2D extent = m_swapchain->extent();
     VkClearValue clear{};
     clear.color = {{m_clearColor.r, m_clearColor.g, m_clearColor.b, m_clearColor.a}};
@@ -661,29 +832,7 @@ void Renderer2D::endFrame() {
     vkCmdSetViewport(cmd, 0, 1, &vp);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    if (!m_batches.empty()) {
-        VkDeviceSize offset = 0;
-        vkCmdBindVertexBuffers(cmd, 0, 1, &f.vertexBuffer, &offset);
-        vkCmdBindIndexBuffer(cmd, m_indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-
-        glm::vec2 size = screenSize();
-        PushConstants screenPc{2.0f / size, glm::vec2(-1.0f)};
-        PushConstants worldPc{2.0f * m_pixelsPerUnit / size, -2.0f * m_camCenter * m_pixelsPerUnit / size};
-
-        VkPipeline bound = VK_NULL_HANDLE;
-        for (const Batch& b : m_batches) {
-            VkPipeline p = b.blend == BlendMode::Additive ? m_pipelineAdditive : m_pipelineAlpha;
-            if (p != bound) {
-                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
-                bound = p;
-            }
-            const PushConstants& pc = b.space == Space::World ? worldPc : screenPc;
-            vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1,
-                                    &m_textures[b.texture].descriptor, 0, nullptr);
-            vkCmdDrawIndexed(cmd, b.indexCount, 1, b.firstIndex, 0, 0);
-        }
-    }
+    recordBatches(cmd, m_batches, /*lightPass=*/false);
 
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
 
@@ -719,6 +868,37 @@ void Renderer2D::endFrame() {
     else if (r != VK_SUCCESS) throw std::runtime_error("failed to present");
 
     m_frameIndex = (m_frameIndex + 1) % kFramesInFlight;
+}
+
+void Renderer2D::recordBatches(VkCommandBuffer cmd, const std::vector<Batch>& batches, bool lightPass) {
+    if (batches.empty()) return;
+    FrameResources& f = m_frames[m_frameIndex];
+    VkDeviceSize offset = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &f.vertexBuffer, &offset);
+    vkCmdBindIndexBuffer(cmd, m_indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+    // Same mapping in both passes: positions go to NDC, whatever the target's size.
+    glm::vec2 size = screenSize();
+    PushConstants screenPc{2.0f / size, glm::vec2(-1.0f)};
+    PushConstants worldPc{2.0f * m_pixelsPerUnit / size, -2.0f * m_camCenter * m_pixelsPerUnit / size};
+
+    VkPipeline bound = VK_NULL_HANDLE;
+    for (const Batch& b : batches) {
+        VkPipeline p;
+        if (lightPass) p = b.blend == BlendMode::Additive ? m_lightPipelineAdditive : m_lightPipelineAlpha;
+        else if (b.blend == BlendMode::Additive) p = m_pipelineAdditive;
+        else if (b.blend == BlendMode::Modulate2x) p = m_pipelineModulate;
+        else p = m_pipelineAlpha;
+        if (p != bound) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
+            bound = p;
+        }
+        const PushConstants& pc = b.space == Space::World ? worldPc : screenPc;
+        vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1,
+                                &m_textures[b.texture].descriptor, 0, nullptr);
+        vkCmdDrawIndexed(cmd, b.indexCount, 1, b.firstIndex, 0, 0);
+    }
 }
 
 void Renderer2D::captureScreenshot() {
