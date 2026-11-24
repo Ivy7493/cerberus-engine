@@ -1,4 +1,6 @@
 build/
+# Left by the old scripts/windows-deps.sh (~37 MB); safe to delete.
+deps/
 .devenv/
 .devenv.flake.nix
 .zig-cache/

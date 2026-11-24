@@ -29,7 +29,9 @@
   env.VK_LAYER_PATH = "${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d";
 
   enterShell = ''
-    # GLFW dlopens libvulkan / X11 / Wayland at runtime.
+    # Vulkan, plus everything GLFW dlopen()s at runtime: without Xinerama,
+    # Xext (shape), Xrender and Xfixes an X11 session silently loses monitor
+    # layout, mouse passthrough and transparent framebuffers.
     export LD_LIBRARY_PATH="${lib.makeLibraryPath [
       pkgs.vulkan-loader
       pkgs.libxkbcommon
@@ -38,6 +40,10 @@
       pkgs.xorg.libXcursor
       pkgs.xorg.libXi
       pkgs.xorg.libXrandr
+      pkgs.xorg.libXinerama
+      pkgs.xorg.libXext
+      pkgs.xorg.libXrender
+      pkgs.xorg.libXfixes
     ]}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   '';
 
