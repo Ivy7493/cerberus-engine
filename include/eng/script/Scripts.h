@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -60,6 +61,12 @@ public:
     // environment can read (an environment can shadow it, not replace it).
     void exposeGlobal(const char* name);
 
+    // Replaces the table on top of the stack with a read-only view of it
+    // (reads pass through, writes raise an error, its metatable is hidden).
+    // Exposed API tables are shared by every environment, so without this a
+    // mod could replace, say, ecs.spawn for everyone.
+    static void makeReadOnly(lua_State* L);
+
     // A sandboxed environment rooted at `root`: require("ai.hound") loads
     // root/ai/hound.lua (or, for Base, hound.luac). A Mod's require falls back
     // to the first Base environment's modules — the same tables, so a mod can
@@ -83,6 +90,14 @@ public:
     // functions; modules that required a reloaded one aren't re-run.
     // Returns how many were reloaded.
     int reloadChanged();
+
+    // Called by reloadChanged() just before a changed module is re-run, with
+    // its chunk name ("@ai/hound.lua", as debug info reports it): lets
+    // bindings drop what that file registered (event handlers) so the re-run
+    // doesn't register it twice.
+    void addReloadListener(std::function<void(const std::string& chunkname)> fn) {
+        m_reloadListeners.push_back(std::move(fn));
+    }
 
     size_t memoryUsed() const { return m_memUsed; }
     const std::string& lastError() const { return m_lastError; }
@@ -132,6 +147,7 @@ private:
     std::vector<Env> m_envs;
     std::vector<Module> m_modules;
     std::string m_lastError;
+    std::vector<std::function<void(const std::string&)>> m_reloadListeners;
 };
 
 }  // namespace eng

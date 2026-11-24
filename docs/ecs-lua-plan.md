@@ -1,6 +1,7 @@
 # ECS + Lua plan
 
-Status: phases 1 and 2 done (ECS core in `eng/ecs/`, tested by `tests/ecs_test.cpp`); phase 3, the Lua bridge, next (branch `ecs-lua`).
+Status: phases 1–3 done (ECS core and the Lua bridge in `eng/ecs/`, tested by `tests/ecs_test.cpp` and
+`tests/luaecs_test.cpp`); phase 4, prefabs + mods, next (branch `ecs-lua`).
 
 ## Decisions
 
@@ -101,7 +102,8 @@ return {
    bytecode compile step for consumers, `eng/script` (states, dev/release loaders, sandbox, instruction
    and memory limits, tracebacks to `ENG_LOG`, hot reload).
 2. **ECS core:** entities, configurable cap, sparse-set storage, prefab caps, command buffer, registry with net metadata.
-3. **Lua bridge:** entity userdata, reflected field access, `spawn`/`destroy`/`query`/events,
+3. **Lua bridge:** (`ecs::LuaEcs`; entities are plain integers rather than userdata, components are
+   reflected refs) entity handles, reflected field access, `spawn`/`destroy`/`query`/events,
    Lua-defined components.
 4. **Prefabs + mods:** prefab loading/validation, mod discovery and load order, overrides, manifest and
    hashes.

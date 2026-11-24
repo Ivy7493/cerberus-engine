@@ -162,6 +162,20 @@ Scripts::~Scripts() {
     if (m_L) lua_close(m_L);
 }
 
+void Scripts::makeReadOnly(lua_State* L) {
+    int real = lua_gettop(L);
+    lua_newtable(L);  // the view
+    lua_newtable(L);  // its metatable
+    lua_pushvalue(L, real);
+    lua_setfield(L, -2, "__index");
+    lua_pushcfunction(L, [](lua_State* L) -> int { return luaL_error(L, "attempt to modify a read-only table"); });
+    lua_setfield(L, -2, "__newindex");
+    lua_pushboolean(L, 0);
+    lua_setfield(L, -2, "__metatable");
+    lua_setmetatable(L, -2);
+    lua_replace(L, real);
+}
+
 void Scripts::exposeGlobal(const char* name) {
     lua_rawgeti(m_L, LUA_REGISTRYINDEX, m_sharedRef);
     lua_insert(m_L, -2);
@@ -487,6 +501,7 @@ int Scripts::reloadChanged() {
         }
         lua_rawgeti(L, LUA_REGISTRYINDEX, env.tableRef);
         if (!lua_setupvalue(L, -2, 1)) lua_pop(L, 1);
+        for (auto& listener : m_reloadListeners) listener(chunkname);
         lua_pushstring(L, name.c_str());
         if (!call(1, 1)) continue;
         if (lua_isnil(L, -1)) {

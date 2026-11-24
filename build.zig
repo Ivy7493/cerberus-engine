@@ -43,6 +43,7 @@ const eng_sources = [_][]const u8{
     "src/script/Scripts.cpp",
     "src/ecs/Registry.cpp",
     "src/ecs/World.cpp",
+    "src/ecs/LuaEcs.cpp",
 };
 
 /// Lua 5.4's core and the libraries eng::Scripts exposes. Not io, os, debug
@@ -266,9 +267,17 @@ pub fn build(b: *std.Build) void {
     for (pc_headers_common) |pkg| addPkgConfigIncludes(b, ecs_mod, pkg);
     ecs_mod.linkLibrary(lib);
     const run_ecs = b.addRunArtifact(b.addExecutable(.{ .name = "ecs_test", .root_module = ecs_mod }));
-    const test_step = b.step("test", "Run eng's own tests (scripting, ECS)");
+    const luaecs_mod = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true, .link_libcpp = true });
+    luaecs_mod.addCSourceFile(.{ .file = b.path("tests/luaecs_test.cpp"), .flags = &cxx_flags });
+    luaecs_mod.addIncludePath(b.path("include"));
+    luaecs_mod.addIncludePath(lua_headers.getDirectory());
+    for (pc_headers_common) |pkg| addPkgConfigIncludes(b, luaecs_mod, pkg);
+    luaecs_mod.linkLibrary(lib);
+    const run_luaecs = b.addRunArtifact(b.addExecutable(.{ .name = "luaecs_test", .root_module = luaecs_mod }));
+    const test_step = b.step("test", "Run eng's own tests (scripting, ECS, the Lua bridge)");
     test_step.dependOn(&run_test.step);
     test_step.dependOn(&run_ecs.step);
+    test_step.dependOn(&run_luaecs.step);
 }
 
 /// Lua's public headers under a lua/ prefix (<lua/lua.h>), as games see them.
