@@ -34,6 +34,15 @@ constexpr CodepointRange kRanges[] = {
     {0x2260, 6},     // ≠ ≡ ≢ ≣ ≤ ≥
 };
 
+// Above 48px (titles, zoomed-in world labels) only ASCII and the dashes /
+// quotes / bullet / ellipsis: the full set at 150px needs a 4096² atlas
+// (64MB, ~100ms to bake). Anything else at those sizes draws as '?'.
+constexpr CodepointRange kLargeRanges[] = {
+    {0x0020, 0x5F},
+    {0x2010, 0x18},
+};
+constexpr int kLargeFrom = 49;
+
 constexpr int kMaxBakePx = 400;  // past this a zoomed-in world label isn't worth an atlas
 
 // The pixel sizes atlases are baked at: every size to 24 (ordinary UI text
@@ -121,13 +130,16 @@ const Renderer2D::FontSize* Renderer2D::fontAtSize(FontId id, int px) {
 
     // Pack every range, doubling the atlas until it fits.
     constexpr size_t kRangeCount = std::size(kRanges);
+    const bool large = px >= kLargeFrom;
+    const CodepointRange* set = large ? kLargeRanges : kRanges;
+    const size_t setCount = large ? std::size(kLargeRanges) : kRangeCount;
     std::vector<stbtt_packedchar> packed[kRangeCount];
     stbtt_pack_range ranges[kRangeCount]{};
-    for (size_t r = 0; r < kRangeCount; ++r) {
-        packed[r].resize(size_t(kRanges[r].count));
+    for (size_t r = 0; r < setCount; ++r) {
+        packed[r].resize(size_t(set[r].count));
         ranges[r].font_size = float(px);
-        ranges[r].first_unicode_codepoint_in_range = kRanges[r].first;
-        ranges[r].num_chars = kRanges[r].count;
+        ranges[r].first_unicode_codepoint_in_range = set[r].first;
+        ranges[r].num_chars = set[r].count;
         ranges[r].chardata_for_range = packed[r].data();
     }
     // Large glyphs don't need sub-pixel placement, so they skip the 2x
@@ -136,7 +148,7 @@ const Renderer2D::FontSize* Renderer2D::fontAtSize(FontId id, int px) {
     // Start near the size it will need (glyph count × cell area, with
     // slack) rather than failing up from 256.
     int glyphCount = 0;
-    for (const auto& r : kRanges) glyphCount += r.count;
+    for (size_t r = 0; r < setCount; ++r) glyphCount += set[r].count;
     float area = float(glyphCount) * float(px) * float(px) * 0.75f * float(oversample);
     int dim = 256;
     while (dim < kMaxAtlas && float(dim) * float(dim) < area) dim *= 2;
@@ -152,7 +164,7 @@ const Renderer2D::FontSize* Renderer2D::fontAtSize(FontId id, int px) {
         // small text keeps even spacing instead of each glyph rounding to a
         // whole pixel (what Dear ImGui does too). Rows stay pixel-aligned.
         stbtt_PackSetOversampling(&pc, unsigned(oversample), 1);
-        bool ok = stbtt_PackFontRanges(&pc, font.ttf.data(), 0, ranges, int(kRangeCount)) != 0;
+        bool ok = stbtt_PackFontRanges(&pc, font.ttf.data(), 0, ranges, int(setCount)) != 0;
         stbtt_PackEnd(&pc);
         if (ok || dim >= kMaxAtlas) {
             if (!ok) ENG_LOG("[render] font '" << font.path << "' at " << px << "px overflows a " << dim << " atlas");
@@ -166,16 +178,16 @@ const Renderer2D::FontSize* Renderer2D::fontAtSize(FontId id, int px) {
     size->texture = createTexture(rgba.get(), uint32_t(dim), uint32_t(dim), /*linear=*/true);
 
     float inv = 1.0f / float(dim);
-    for (size_t r = 0; r < kRangeCount; ++r) {
-        for (int i = 0; i < kRanges[r].count; ++i) {
+    for (size_t r = 0; r < setCount; ++r) {
+        for (int i = 0; i < set[r].count; ++i) {
             const stbtt_packedchar& c = packed[r][size_t(i)];
             FontSize::Glyph g;
             g.off0 = {c.xoff, c.yoff};
             g.off1 = {c.xoff2, c.yoff2};
             g.uv = {c.x0 * inv, c.y0 * inv, c.x1 * inv, c.y1 * inv};
             g.advance = c.xadvance;
-            g.index = stbtt_FindGlyphIndex(&font.info, kRanges[r].first + i);
-            size->glyphs.emplace(uint32_t(kRanges[r].first + i), g);
+            g.index = stbtt_FindGlyphIndex(&font.info, set[r].first + i);
+            size->glyphs.emplace(uint32_t(set[r].first + i), g);
         }
     }
     size->fallback = size->glyph('?');
