@@ -107,6 +107,7 @@ private:
     static int luaRequire(lua_State* L);
     static int luaPcall(lua_State* L);
     static int luaXpcall(lua_State* L);
+    static int luaMessageGuard(lua_State* L);
     static int luaFinishPcall(lua_State* L, int status, intptr_t ctx);
     static int luaResumeGuard(lua_State* L);
     static int luaSetmetatable(lua_State* L);

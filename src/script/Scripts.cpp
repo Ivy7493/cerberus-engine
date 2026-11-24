@@ -266,9 +266,26 @@ int Scripts::luaPcall(lua_State* L) {
     return luaFinishPcall(L, status, 0);
 }
 
+// xpcall's message handler, guarded. When the instruction hook raises the
+// limit error, Lua runs the message handler right there — inside the hook,
+// where hooks are off — so a handler that loops would never be stopped.
+// Once the budget is spent the script's handler is skipped and the error
+// passes through as it is; for any other error it runs (hooks on, limited).
+int Scripts::luaMessageGuard(lua_State* L) {
+    if (self(L).m_exhausted) return 1;  // the error message, unchanged
+    int n = lua_gettop(L);
+    lua_pushvalue(L, lua_upvalueindex(1));
+    lua_insert(L, 1);
+    lua_call(L, n, 1);
+    return 1;
+}
+
 int Scripts::luaXpcall(lua_State* L) {
     int n = lua_gettop(L);
     luaL_checktype(L, 2, LUA_TFUNCTION);
+    lua_pushvalue(L, 2);
+    lua_pushcclosure(L, &Scripts::luaMessageGuard, 1);
+    lua_replace(L, 2);
     lua_pushboolean(L, 1);
     lua_pushvalue(L, 1);
     lua_rotate(L, 3, 2);
