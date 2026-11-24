@@ -12,6 +12,10 @@
             .url = "https://github.com/nicbarker/clay/archive/e6cc36941ab2af5d81107617039d6f527a1c660b.tar.gz",
             .hash = "N-V-__8AAJD1dwCrm4WaLcFFKlMrXQwYNnAXSMjKC_4L1L9O",
         },
+        .lua = .{
+            .url = "https://www.lua.org/ftp/lua-5.4.8.tar.gz",
+            .hash = "N-V-__8AAKEzFAAA695b9LXBhUSVK5MAV_VKSm1mEj3Acbze",
+        },
     },
     .paths = .{
         "build.zig",
