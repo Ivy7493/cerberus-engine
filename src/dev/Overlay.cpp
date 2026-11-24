@@ -318,7 +318,9 @@ void Overlay::draw(ui::Context& ui) {
 
     ui::beginPanel(CLAY_ID("eng_dev_overlay"),
                    {.width = 460, .maxHeight = 1040, .anchor = {0.0f, 0.0f}, .offset = {12.0f, 12.0f}, .padX = 14,
-                    .padY = 12, .gap = 6, .zIndex = 900, .scroll = true,
+                    .padY = 12, .gap = 6, .zIndex = 900,
+                    .capture = false,  // read-only: clicks go through to whatever's under it
+                    .scroll = true,
                     .color = {th.panel.r, th.panel.g, th.panel.b, m_opacity}});
 
     // ── Frame ──
