@@ -92,7 +92,10 @@ private:
     Renderer2D& m_r;
     FontId m_font = kNoFont;
     float m_fontSize = 16.0f;
-    std::vector<glm::vec2> m_path, m_scratch;
+    std::vector<glm::vec2> m_path;
+    // Reused per shape (no allocation per circle/line once they've grown).
+    std::vector<glm::vec2> m_edge, m_inner, m_outer, m_seg, m_norm;
+    std::vector<int> m_idx;
 };
 
 }  // namespace eng

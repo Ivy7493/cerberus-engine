@@ -1,7 +1,6 @@
 // Text rendering for Renderer2D: TrueType fonts via stb_truetype, one glyph
 // atlas per (font, integer pixel size), glyphs drawn as ordinary sprites so
 // text batches and clips like everything else.
-#define STB_TRUETYPE_IMPLEMENTATION
 #include "Font.h"
 
 #include "eng/core/Log.h"
@@ -9,6 +8,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
+#include <memory>
 #include <fstream>
 #include <iterator>
 #include <string_view>
@@ -34,6 +35,23 @@ constexpr CodepointRange kRanges[] = {
 };
 
 constexpr int kMaxBakePx = 400;  // past this a zoomed-in world label isn't worth an atlas
+
+// The pixel sizes atlases are baked at: every size to 24 (ordinary UI text
+// is drawn at exactly its size, crisp), then rungs at most 25% apart. Text
+// at any other size draws from the next rung up, scaled down (bilinear).
+// Baking costs milliseconds (a GPU upload stall included), so text whose
+// size animates or follows the camera zoom must not bake a new atlas for
+// every pixel size it passes through.
+constexpr int kRungs[] = {28, 32, 40, 48, 64, 80, 96, 128, 160, 200, 256, 320, 400};
+
+int bakeSize(float px) {
+    int p = int(std::ceil(px - 0.01f));
+    if (p <= 24) return std::max(p, 1);
+    for (int r : kRungs)
+        if (r >= p) return r;
+    return kMaxBakePx;
+}
+
 constexpr int kMaxAtlas = 4096;
 
 // Next codepoint from UTF-8 at `i` (advanced past it). Malformed bytes
@@ -112,16 +130,28 @@ const Renderer2D::FontSize* Renderer2D::fontAtSize(FontId id, int px) {
         ranges[r].num_chars = kRanges[r].count;
         ranges[r].chardata_for_range = packed[r].data();
     }
+    // Large glyphs don't need sub-pixel placement, so they skip the 2x
+    // horizontal oversampling (half the atlas area to rasterize and upload).
+    int oversample = px < 32 ? 2 : 1;
+    // Start near the size it will need (glyph count × cell area, with
+    // slack) rather than failing up from 256.
+    int glyphCount = 0;
+    for (const auto& r : kRanges) glyphCount += r.count;
+    float area = float(glyphCount) * float(px) * float(px) * 0.75f * float(oversample);
     int dim = 256;
-    std::vector<unsigned char> alpha;
+    while (dim < kMaxAtlas && float(dim) * float(dim) < area) dim *= 2;
+    // Plain buffers, not std::vector: a vector's zero-fill loop over 4–64MB
+    // runs unoptimized in Debug builds and was most of a bake's time.
+    std::unique_ptr<unsigned char[]> alpha;
     for (;; dim *= 2) {
-        alpha.assign(size_t(dim) * size_t(dim), 0);
+        alpha.reset(new unsigned char[size_t(dim) * size_t(dim)]);
+        std::memset(alpha.get(), 0, size_t(dim) * size_t(dim));
         stbtt_pack_context pc;
-        if (!stbtt_PackBegin(&pc, alpha.data(), dim, dim, 0, 1, nullptr)) break;
+        if (!stbtt_PackBegin(&pc, alpha.get(), dim, dim, 0, 1, nullptr)) break;
         // 2x horizontally + bilinear sampling = sub-pixel glyph placement, so
         // small text keeps even spacing instead of each glyph rounding to a
         // whole pixel (what Dear ImGui does too). Rows stay pixel-aligned.
-        stbtt_PackSetOversampling(&pc, 2, 1);
+        stbtt_PackSetOversampling(&pc, unsigned(oversample), 1);
         bool ok = stbtt_PackFontRanges(&pc, font.ttf.data(), 0, ranges, int(kRangeCount)) != 0;
         stbtt_PackEnd(&pc);
         if (ok || dim >= kMaxAtlas) {
@@ -130,12 +160,10 @@ const Renderer2D::FontSize* Renderer2D::fontAtSize(FontId id, int px) {
         }
     }
 
-    std::vector<uint8_t> rgba(alpha.size() * 4);
-    for (size_t i = 0; i < alpha.size(); ++i) {
-        rgba[i * 4 + 0] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = 255;
-        rgba[i * 4 + 3] = alpha[i];
-    }
-    size->texture = createTexture(rgba.data(), uint32_t(dim), uint32_t(dim), /*linear=*/true);
+    size_t pixels = size_t(dim) * size_t(dim);
+    std::unique_ptr<uint8_t[]> rgba(new uint8_t[pixels * 4]);
+    alphaToRgba(alpha.get(), rgba.get(), pixels);
+    size->texture = createTexture(rgba.get(), uint32_t(dim), uint32_t(dim), /*linear=*/true);
 
     float inv = 1.0f / float(dim);
     for (size_t r = 0; r < kRangeCount; ++r) {
@@ -146,6 +174,7 @@ const Renderer2D::FontSize* Renderer2D::fontAtSize(FontId id, int px) {
             g.off1 = {c.xoff2, c.yoff2};
             g.uv = {c.x0 * inv, c.y0 * inv, c.x1 * inv, c.y1 * inv};
             g.advance = c.xadvance;
+            g.index = stbtt_FindGlyphIndex(&font.info, kRanges[r].first + i);
             size->glyphs.emplace(uint32_t(kRanges[r].first + i), g);
         }
     }
@@ -153,6 +182,14 @@ const Renderer2D::FontSize* Renderer2D::fontAtSize(FontId id, int px) {
 
     font.sizes.push_back(std::move(size));
     return font.sizes.back().get();
+}
+
+void Renderer2D::prewarmFont(FontId font, float upToPixelSize) {
+    if (font >= m_fonts.size()) return;
+    int top = bakeSize(upToPixelSize);
+    for (int px = 6; px <= std::min(top, 24); ++px) fontAtSize(font, px);
+    for (int r : kRungs)
+        if (r <= top) fontAtSize(font, r);
 }
 
 FontMetrics Renderer2D::fontMetrics(FontId id, float pixelSize) {
@@ -165,26 +202,27 @@ glm::vec2 Renderer2D::measureText(FontId id, float pixelSize, std::string_view t
     if (id >= m_fonts.size() || pixelSize <= 0.0f) return {0.0f, 0.0f};
     // Measured at the size it will be drawn at (screen pixels), then scaled
     // back if that was rounded, so layout agrees with drawText.
-    int px = std::clamp(int(std::lround(pixelSize)), 1, kMaxBakePx);
+    int px = bakeSize(pixelSize);
     const FontSize* size = fontAtSize(id, px);
     const stbtt_fontinfo& info = m_fonts[id]->info;
     float k = pixelSize / float(px);
 
     float widest = 0.0f, pen = 0.0f;
     int lines = 1;
-    uint32_t prev = 0;
+    const FontSize::Glyph* prev = nullptr;
     for (size_t i = 0; i < text.size();) {
         uint32_t cp = nextCodepoint(text, i);
         if (cp == '\n') {
             widest = std::max(widest, pen);
             pen = 0.0f;
-            prev = 0;
+            prev = nullptr;
             ++lines;
             continue;
         }
-        if (prev) pen += float(stbtt_GetCodepointKernAdvance(&info, int(prev), int(cp))) * size->scale + letterSpacing / k;
-        pen += size->glyph(cp).advance;
-        prev = cp;
+        const FontSize::Glyph& g = size->glyph(cp);
+        if (prev) pen += size->kern(info, *prev, g) + letterSpacing / k;
+        pen += g.advance;
+        prev = &g;
     }
     widest = std::max(widest, pen);
     return {widest * k, float(lines) * size->metrics.lineHeight * k};
@@ -195,7 +233,7 @@ void Renderer2D::drawText(FontId id, float pixelSize, const glm::vec2& topLeft, 
     if (id >= m_fonts.size() || pixelSize <= 0.0f || color.a <= 0.0f || text.empty()) return;
     // Rasterize at the on-screen size; world text scales back to world units.
     float pixelsPerUnit = space == Space::World ? m_pixelsPerUnit : 1.0f;
-    int px = std::clamp(int(std::lround(pixelSize * pixelsPerUnit)), 1, kMaxBakePx);
+    int px = bakeSize(pixelSize * pixelsPerUnit);
     const FontSize* size = fontAtSize(id, px);
     const stbtt_fontinfo& info = m_fonts[id]->info;
     float k = pixelSize / float(px);  // drawing units per baked pixel
@@ -205,17 +243,17 @@ void Renderer2D::drawText(FontId id, float pixelSize, const glm::vec2& topLeft, 
 
     float lineTop = topLeft.y;
     float pen = 0.0f;  // baked pixels from the line start
-    uint32_t prev = 0;
+    const FontSize::Glyph* prev = nullptr;
     for (size_t i = 0; i < text.size();) {
         uint32_t cp = nextCodepoint(text, i);
         if (cp == '\n') {
             lineTop += size->metrics.lineHeight * k;
             pen = 0.0f;
-            prev = 0;
+            prev = nullptr;
             continue;
         }
-        if (prev) pen += float(stbtt_GetCodepointKernAdvance(&info, int(prev), int(cp))) * size->scale + letterSpacing / k;
         const FontSize::Glyph& g = size->glyph(cp);
+        if (prev) pen += size->kern(info, *prev, g) + letterSpacing / k;
         if (g.off1.x > g.off0.x) {  // spaces have no quad
             glm::vec2 origin{topLeft.x + pen * k, snapped(lineTop + size->metrics.ascent * k)};
             glm::vec2 p0 = origin + g.off0 * k, p1 = origin + g.off1 * k;
@@ -229,7 +267,7 @@ void Renderer2D::drawText(FontId id, float pixelSize, const glm::vec2& topLeft, 
             draw(s);
         }
         pen += g.advance;
-        prev = cp;
+        prev = &g;
     }
 }
 

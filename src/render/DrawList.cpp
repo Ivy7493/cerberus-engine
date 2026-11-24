@@ -64,10 +64,13 @@ void DrawList::convexPolyFilled(const glm::vec2* p, int n, Color32 color) {
     // Edge normals must point out of the shape for the fringe to grow
     // outward; which way (dy, -dx) points depends on winding.
     float flip = signedArea(p, n) < 0.0f ? -1.0f : 1.0f;
-    std::vector<glm::vec2>& edge = m_scratch;
+    std::vector<glm::vec2>& edge = m_edge;
     edge.resize(size_t(n));
     for (int i = 0; i < n; ++i) edge[size_t(i)] = normalOf(p[(i + 1) % n] - p[i]) * -flip;
-    std::vector<glm::vec2> inner(static_cast<size_t>(n)), outer(static_cast<size_t>(n));
+    std::vector<glm::vec2>& inner = m_inner;
+    std::vector<glm::vec2>& outer = m_outer;
+    inner.resize(size_t(n));
+    outer.resize(size_t(n));
     for (int i = 0; i < n; ++i) {
         glm::vec2 dm = miter(edge[size_t((i + n - 1) % n)], edge[size_t(i)]) * (kAA * 0.5f);
         inner[size_t(i)] = p[i] - dm;
@@ -88,9 +91,11 @@ void DrawList::polyline(const glm::vec2* p, int n, Color32 color, bool closed, f
     glm::vec4 t = withAlpha(c, 0.0f);
     int segs = closed ? n : n - 1;
 
-    std::vector<glm::vec2> seg(static_cast<size_t>(segs));
+    std::vector<glm::vec2>& seg = m_seg;
+    seg.resize(size_t(segs));
     for (int i = 0; i < segs; ++i) seg[size_t(i)] = normalOf(p[(i + 1) % n] - p[i]);
-    std::vector<glm::vec2> norm(static_cast<size_t>(n));
+    std::vector<glm::vec2>& norm = m_norm;
+    norm.resize(size_t(n));
     for (int i = 0; i < n; ++i) {
         if (!closed && i == 0) norm[0] = seg[0];
         else if (!closed && i == n - 1) norm[size_t(i)] = seg[size_t(segs - 1)];
@@ -118,7 +123,8 @@ void DrawList::concavePolyFilled(const glm::vec2* p, int n, Color32 color) {
     if (n < 3 || (color >> 24) == 0) return;
     glm::vec4 c = unpackColor(color);
     // Ear clipping on a counter-clockwise copy (y-down: positive area).
-    std::vector<int> idx(static_cast<size_t>(n));
+    std::vector<int>& idx = m_idx;
+    idx.resize(size_t(n));
     for (int i = 0; i < n; ++i) idx[size_t(i)] = i;
     if (signedArea(p, n) < 0.0f) std::reverse(idx.begin(), idx.end());
     auto cross = [](glm::vec2 a, glm::vec2 b, glm::vec2 q) { return (b.x - a.x) * (q.y - a.y) - (b.y - a.y) * (q.x - a.x); };

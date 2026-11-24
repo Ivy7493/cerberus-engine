@@ -167,6 +167,13 @@ pub fn build(b: *std.Build) void {
 
     // ── eng itself ───────────────────────────────────────────────────────────
     mod.addCSourceFiles(.{ .files = &eng_sources, .flags = &cxx_flags });
+    // stb_truetype rasterizes font atlases: its own library, always built
+    // ReleaseFast, or in Debug a new text size stalls a frame for ~80ms while
+    // it bakes (a per-file -O2 flag loses to zig's Debug flags).
+    const stbtt_mod = b.createModule(.{ .target = target, .optimize = .ReleaseFast, .link_libc = true, .link_libcpp = true });
+    stbtt_mod.addCSourceFile(.{ .file = b.path("src/render/StbTruetype.cpp"), .flags = &.{ "-std=c++20", "-w" } });
+    stbtt_mod.addIncludePath(b.path("third_party"));
+    mod.linkLibrary(b.addLibrary(.{ .name = "eng_stbtt", .linkage = .static, .root_module = stbtt_mod }));
     // miniaudio's implementation TU trips plenty of warnings; keep eng quiet.
     mod.addCSourceFile(.{ .file = b.path("src/audio/Audio.cpp"), .flags = &(cxx_flags ++ .{"-w"}) });
     mod.addIncludePath(b.path("include"));

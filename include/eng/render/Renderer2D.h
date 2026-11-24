@@ -150,6 +150,9 @@ public:
     // text sits on whole-pixel rows. loadFont returns kNoFont
     // and logs if the file can't be read; text in kNoFont draws nothing.
     FontId loadFont(const std::string& path);
+    // Bake every atlas this font will use up to `upToPixelSize` now (say at
+    // startup) instead of on first use mid-game, where each bake is a hitch.
+    void prewarmFont(FontId font, float upToPixelSize);
     FontMetrics fontMetrics(FontId font, float pixelSize);
     // Width of the widest line (lines split on '\n') and lines × lineHeight.
     glm::vec2 measureText(FontId font, float pixelSize, std::string_view utf8, float letterSpacing = 0.0f);
