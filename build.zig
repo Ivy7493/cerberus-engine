@@ -31,6 +31,7 @@ const eng_sources = [_][]const u8{
     "src/render/StbImage.cpp",
     "src/render/Text.cpp",
     "src/render/Shapes.cpp",
+    "src/render/DrawList.cpp",
     "src/ui/Ui.cpp",
     "src/ui/Widgets.cpp",
     "src/net/UdpSocket.cpp",
@@ -38,15 +39,6 @@ const eng_sources = [_][]const u8{
     "src/net/SteamPlatform.cpp",
     "src/net/SteamTransport.cpp",
     "src/net/LagTransport.cpp",
-};
-
-const imgui_sources = [_][]const u8{
-    "imgui.cpp",
-    "imgui_draw.cpp",
-    "imgui_tables.cpp",
-    "imgui_widgets.cpp",
-    "backends/imgui_impl_glfw.cpp",
-    "backends/imgui_impl_vulkan.cpp",
 };
 
 const glfw_common = [_][]const u8{
@@ -118,10 +110,7 @@ pub fn build(b: *std.Build) void {
 
     for (pc_headers_common) |pkg| addPkgConfigIncludes(b, mod, pkg);
 
-    const cxx_flags = [_][]const u8{
-        "-std=c++20",
-        "-Wno-nontrivial-memcall", // imgui's memset(this, ...) constructors
-    };
+    const cxx_flags = [_][]const u8{"-std=c++20"};
 
     // ── GLFW 3.4, built from source ──────────────────────────────────────────
     // Its own library: GLFW's sources refuse the header-option macros
@@ -158,12 +147,6 @@ pub fn build(b: *std.Build) void {
         for ([_][]const u8{ "dl", "pthread", "m" }) |lib| mod.linkSystemLibrary(lib, .{});
     }
 
-    // ── Dear ImGui (built into eng; games include <imgui.h> through it) ──────
-    const imgui = b.dependency("imgui", .{});
-    mod.addCSourceFiles(.{ .root = imgui.path(""), .files = &imgui_sources, .flags = &cxx_flags });
-    mod.addIncludePath(imgui.path(""));
-    mod.addIncludePath(imgui.path("backends"));
-
     // ── Clay (UI layout; games use its CLAY() macros through <clay.h>) ───────
     // Its implementation is plain C99, compiled once here; the header also
     // compiles as C++20, which is how eng::ui and games include it.
@@ -193,7 +176,6 @@ pub fn build(b: *std.Build) void {
     const lib = b.addLibrary(.{ .name = "eng", .linkage = .static, .root_module = mod });
     lib.installHeadersDirectory(b.path("include/eng"), "eng", .{});
     lib.installHeader(config_h, "eng/config.h");
-    lib.installHeadersDirectory(imgui.path(""), "", .{ .include_extensions = &.{".h"} });
     lib.installHeadersDirectory(glfw.path("include/GLFW"), "GLFW", .{});
     lib.installHeader(clay.path("clay.h"), "clay.h");
     if (steam) lib.installHeadersDirectory(b.path(steam_sdk ++ "/public/steam"), "steam", .{});

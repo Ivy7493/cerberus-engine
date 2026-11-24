@@ -8,9 +8,6 @@
 #include "Font.h"
 
 #include <GLFW/glfw3.h>
-#include <backends/imgui_impl_glfw.h>
-#include <backends/imgui_impl_vulkan.h>
-#include <imgui.h>
 #include <stb_image.h>
 #include <stb_image_write.h>
 
@@ -18,7 +15,6 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
-#include <span>
 #include <stdexcept>
 
 namespace eng {
@@ -70,9 +66,9 @@ Renderer2D::Renderer2D(Window& window, const Options& options) : m_window(window
     createPipelines();
     createFrameResources();
     createIndexBuffer();
-    initImGui(options);
+    createDescriptorPool();
     createBuiltinTextures();
-    createLightmaps();  // after ImGui (its descriptor sets) and the builtins (fixed ids)
+    createLightmaps();  // after the builtins (their fixed ids)
 
     m_vertices.reserve(kMaxSprites * 4);
     m_clips.assign(1, VkRect2D{});
@@ -84,13 +80,9 @@ Renderer2D::~Renderer2D() {
 
     destroyLightmaps();
     for (auto& tex : m_textures) {
-        if (tex.descriptor) ImGui_ImplVulkan_RemoveTexture(tex.descriptor);
         vkutil::destroyTexture(*m_context, tex.res);
     }
-    ImGui_ImplVulkan_Shutdown();
-    ImGui_ImplGlfw_Shutdown();
-    ImGui::DestroyContext();
-    vkDestroyDescriptorPool(dev, m_imguiPool, nullptr);
+    vkDestroyDescriptorPool(dev, m_descriptorPool, nullptr);  // frees every texture's set with it
 
     for (auto& f : m_frames) {
         vkDestroySemaphore(dev, f.imageAvailable, nullptr);
@@ -212,10 +204,7 @@ void Renderer2D::destroyFramebuffers() {
 void Renderer2D::createPipelines() {
     VkDevice dev = m_context->device();
 
-    // Must stay identical to Dear ImGui's own texture set layout (one
-    // combined image sampler, binding 0, fragment stage): sprite textures
-    // get their descriptor sets from ImGui_ImplVulkan_AddTexture, and
-    // Vulkan only allows binding a set against an identically-defined layout.
+    // One combined image sampler (binding 0, fragment stage) per texture.
     VkDescriptorSetLayoutBinding binding{};
     binding.binding = 0;
     binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -377,7 +366,7 @@ void Renderer2D::createLightmaps() {
         // A texture slot like any other, so the composite is an ordinary
         // sprite batch. Resources are owned here; the slot only holds the set.
         Texture tex;
-        tex.descriptor = ImGui_ImplVulkan_AddTexture(m_lightSampler, lm.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        tex.descriptor = allocateTextureSet(m_lightSampler, lm.view);
         tex.width = m_lightExtent.width;
         tex.height = m_lightExtent.height;
         if (lm.texture) {
@@ -393,7 +382,7 @@ void Renderer2D::destroyLightmaps() {
     VkDevice dev = m_context->device();
     for (Lightmap& lm : m_lightmaps) {
         if (lm.texture && m_textures[lm.texture].descriptor) {
-            ImGui_ImplVulkan_RemoveTexture(m_textures[lm.texture].descriptor);
+            freeTextureSet(m_textures[lm.texture].descriptor);
             m_textures[lm.texture].descriptor = VK_NULL_HANDLE;
         }
         if (lm.framebuffer) vkDestroyFramebuffer(dev, lm.framebuffer, nullptr);
@@ -453,60 +442,46 @@ void Renderer2D::createIndexBuffer() {
     vkUnmapMemory(m_context->device(), m_indexMemory);
 }
 
-void Renderer2D::initImGui(const Options& options) {
-    // Sized for every sprite texture too (see createPipelines' layout note) —
-    // one combined-image-sampler set per loaded texture plus ImGui's font.
-    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2048};
+void Renderer2D::createDescriptorPool() {
+    // One combined-image-sampler set per texture (sprites, font atlases, the
+    // lightmaps); sets are freed individually as lightmaps are recreated.
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4096};
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-    poolInfo.maxSets = 2048;
+    poolInfo.maxSets = 4096;
     poolInfo.poolSizeCount = 1;
     poolInfo.pPoolSizes = &poolSize;
-    if (vkCreateDescriptorPool(m_context->device(), &poolInfo, nullptr, &m_imguiPool) != VK_SUCCESS)
-        throw std::runtime_error("failed to create ImGui descriptor pool");
+    if (vkCreateDescriptorPool(m_context->device(), &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS)
+        throw std::runtime_error("failed to create descriptor pool");
+}
 
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
-    io.IniFilename = nullptr;  // no imgui.ini littering the working directory
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard;
-    ImGui::StyleColorsDark();
+VkDescriptorSet Renderer2D::allocateTextureSet(VkSampler sampler, VkImageView view) {
+    VkDescriptorSetAllocateInfo alloc{};
+    alloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    alloc.descriptorPool = m_descriptorPool;
+    alloc.descriptorSetCount = 1;
+    alloc.pSetLayouts = &m_textureSetLayout;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    if (vkAllocateDescriptorSets(m_context->device(), &alloc, &set) != VK_SUCCESS)
+        throw std::runtime_error("failed to allocate a texture descriptor set (pool exhausted?)");
+    VkDescriptorImageInfo image{};
+    image.sampler = sampler;
+    image.imageView = view;
+    image.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = set;
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &image;
+    vkUpdateDescriptorSets(m_context->device(), 1, &write, 0, nullptr);
+    return set;
+}
 
-    // Rasterized at kFontOversample x and scaled back down via
-    // FontGlobalScale (see setUiScale), so large UI scales stay sharp.
-    float body = options.fontSize * kFontOversample, title = options.titleFontSize * kFontOversample;
-    if (!options.fontPath.empty() && std::filesystem::exists(options.fontPath)) {
-        io.Fonts->AddFontFromFileTTF(options.fontPath.c_str(), body);
-    } else {
-        ImFontConfig cfg;
-        cfg.SizePixels = body;
-        io.Fonts->AddFontDefault(&cfg);
-    }
-    if (!options.titleFontPath.empty() && std::filesystem::exists(options.titleFontPath))
-        m_titleFont = io.Fonts->AddFontFromFileTTF(options.titleFontPath.c_str(), title);
-    if (!m_titleFont) {
-        ImFontConfig cfg;
-        cfg.SizePixels = title;
-        m_titleFont = io.Fonts->AddFontDefault(&cfg);
-    }
-    io.FontGlobalScale = 1.0f / kFontOversample;
-
-    ImGui_ImplGlfw_InitForVulkan(m_window.handle(), /*install_callbacks=*/true);
-
-    ImGui_ImplVulkan_InitInfo initInfo{};
-    initInfo.Instance = m_context->instance();
-    initInfo.PhysicalDevice = m_context->physicalDevice();
-    initInfo.Device = m_context->device();
-    initInfo.QueueFamily = m_context->queueFamilies().graphicsFamily.value();
-    initInfo.Queue = m_context->graphicsQueue();
-    initInfo.DescriptorPool = m_imguiPool;
-    initInfo.RenderPass = m_renderPass;
-    initInfo.MinImageCount = kFramesInFlight;
-    initInfo.ImageCount = static_cast<uint32_t>(m_swapchain->imageCount());
-    initInfo.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
-    ImGui_ImplVulkan_Init(&initInfo);
-    // Font texture uploads automatically on the first ImGui_ImplVulkan_NewFrame().
+void Renderer2D::freeTextureSet(VkDescriptorSet set) {
+    if (set) vkFreeDescriptorSets(m_context->device(), m_descriptorPool, 1, &set);
 }
 
 void Renderer2D::createBuiltinTextures() {
@@ -548,25 +523,6 @@ void Renderer2D::createBuiltinTextures() {
     if (w != kWhite || c != kCircle || g != kGlow) throw std::logic_error("builtin texture ids out of order");
 }
 
-// ── UI scale ─────────────────────────────────────────────────────────────────
-
-float Renderer2D::titleFontSize() const { return m_titleFont ? m_titleFont->FontSize * ImGui::GetIO().FontGlobalScale : 0.0f; }
-
-void Renderer2D::captureBaseStyle() {
-    m_baseStyle = std::make_unique<ImGuiStyle>(ImGui::GetStyle());
-    setUiScale(m_uiScale);
-}
-
-void Renderer2D::setUiScale(float scale) {
-    m_uiScale = scale;
-    ImGui::GetIO().FontGlobalScale = scale / kFontOversample;
-    if (m_baseStyle) {
-        ImGuiStyle style = *m_baseStyle;
-        style.ScaleAllSizes(scale);
-        ImGui::GetStyle() = style;
-    }
-}
-
 // ── Textures ─────────────────────────────────────────────────────────────────
 
 TextureId Renderer2D::createTexture(const uint8_t* rgba, uint32_t width, uint32_t height, bool linear) {
@@ -575,8 +531,7 @@ TextureId Renderer2D::createTexture(const uint8_t* rgba, uint32_t width, uint32_
     // nearest-filtered at every size.
     tex.res = vkutil::createTextureFromPixels(*m_context, m_commandPool, rgba, width, height,
                                               /*generateMips=*/false, linear);
-    tex.descriptor = ImGui_ImplVulkan_AddTexture(tex.res.sampler, tex.res.view,
-                                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    tex.descriptor = allocateTextureSet(tex.res.sampler, tex.res.view);
     tex.width = width;
     tex.height = height;
     m_textures.push_back(tex);
@@ -598,11 +553,6 @@ TextureId Renderer2D::loadTexture(const std::string& path) {
 glm::ivec2 Renderer2D::textureSize(TextureId id) const {
     if (id >= m_textures.size()) return {0, 0};
     return {m_textures[id].width, m_textures[id].height};
-}
-
-void* Renderer2D::imguiTexture(TextureId id) const {
-    if (id >= m_textures.size()) id = kWhite;
-    return reinterpret_cast<void*>(m_textures[id].descriptor);
 }
 
 // ── Camera ───────────────────────────────────────────────────────────────────
@@ -652,8 +602,7 @@ void Renderer2D::pushVertices(const Vertex* v, TextureId texture, BlendMode blen
     // Clips are a screen/UI thing; the lightmap pass ignores them.
     uint32_t clip = m_inLights || m_clipStack.empty() ? 0 : m_clipStack.back();
     std::vector<Batch>& batches = m_inLights ? m_lightBatches : m_batches;
-    bool atSplit = !m_inLights && m_batches.size() == m_aboveImGui;  // first batch above ImGui starts fresh
-    if (!batches.empty() && !atSplit) {
+    if (!batches.empty()) {
         Batch& last = batches.back();
         if (last.texture == tex && last.blend == blend && last.space == space && last.clip == clip &&
             last.firstIndex + last.indexCount == firstIndex) {
@@ -668,6 +617,20 @@ void Renderer2D::pushQuad(const glm::vec2 (&p)[4], const glm::vec4& color, Space
     if (m_vertices.size() + 4 > kMaxSprites * 4) return;
     glm::vec2 uv(0.5f);
     Vertex v[4] = {{p[0], uv, color}, {p[1], uv, color}, {p[2], uv, color}, {p[3], uv, color}};
+    pushVertices(v, kWhite, BlendMode::Alpha, space);
+}
+
+void Renderer2D::drawTriangleColors(const glm::vec2 (&p)[3], const glm::vec4 (&c)[3], Space space) {
+    if (m_vertices.size() + 4 > kMaxSprites * 4) return;
+    glm::vec2 uv(0.5f);
+    Vertex v[4] = {{p[0], uv, c[0]}, {p[1], uv, c[1]}, {p[2], uv, c[2]}, {p[2], uv, c[2]}};  // degenerate 2nd triangle
+    pushVertices(v, kWhite, BlendMode::Alpha, space);
+}
+
+void Renderer2D::drawQuadColors(const glm::vec2 (&p)[4], const glm::vec4 (&c)[4], Space space) {
+    if (m_vertices.size() + 4 > kMaxSprites * 4) return;
+    glm::vec2 uv(0.5f);
+    Vertex v[4] = {{p[0], uv, c[0]}, {p[1], uv, c[1]}, {p[2], uv, c[2]}, {p[3], uv, c[3]}};
     pushVertices(v, kWhite, BlendMode::Alpha, space);
 }
 
@@ -690,10 +653,6 @@ void Renderer2D::pushClip(const Rect& r) {
     rect.extent = {uint32_t(std::max(0.0f, x1 - x0)), uint32_t(std::max(0.0f, y1 - y0))};
     m_clips.push_back(rect);
     m_clipStack.push_back(uint32_t(m_clips.size() - 1));
-}
-
-void Renderer2D::beginAboveImGui() {
-    if (m_aboveImGui == SIZE_MAX) m_aboveImGui = m_batches.size();
 }
 
 void Renderer2D::popClip() {
@@ -785,7 +744,6 @@ void Renderer2D::recreateSwapchain() {
     m_swapchain->recreate();
     createFramebuffers();
     createLightmaps();
-    ImGui_ImplVulkan_SetMinImageCount(kFramesInFlight);
 }
 
 bool Renderer2D::beginFrame() {
@@ -813,13 +771,8 @@ bool Renderer2D::beginFrame() {
     m_lightBatches.clear();
     m_clips.resize(1);
     m_clipStack.clear();
-    m_aboveImGui = SIZE_MAX;
     m_inLights = false;
     m_lightsUsed = false;
-
-    ImGui_ImplVulkan_NewFrame();
-    ImGui_ImplGlfw_NewFrame();
-    ImGui::NewFrame();
     m_frameActive = true;
     return true;
 }
@@ -827,7 +780,6 @@ bool Renderer2D::beginFrame() {
 void Renderer2D::endFrame() {
     if (!m_frameActive) return;
     m_frameActive = false;
-    ImGui::Render();
 
     FrameResources& f = m_frames[m_frameIndex];
     std::memcpy(f.vertexMapped, m_vertices.data(), m_vertices.size() * sizeof(Vertex));
@@ -856,7 +808,7 @@ void Renderer2D::endFrame() {
         VkRect2D lscissor{{0, 0}, m_lightExtent};
         vkCmdSetViewport(cmd, 0, 1, &lvp);
         vkCmdSetScissor(cmd, 0, 1, &lscissor);
-        recordBatches(cmd, m_lightBatches.data(), m_lightBatches.size(), /*lightPass=*/true);
+        recordBatches(cmd, m_lightBatches, /*lightPass=*/true);
         vkCmdEndRenderPass(cmd);
     }
 
@@ -877,17 +829,7 @@ void Renderer2D::endFrame() {
     vkCmdSetViewport(cmd, 0, 1, &vp);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    size_t split = std::min(m_aboveImGui, m_batches.size());
-    recordBatches(cmd, m_batches.data(), split, /*lightPass=*/false);
-
-    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
-
-    if (split < m_batches.size()) {
-        // ImGui left its own pipeline, buffers, scissor and viewport bound.
-        vkCmdSetViewport(cmd, 0, 1, &vp);
-        vkCmdSetScissor(cmd, 0, 1, &scissor);
-        recordBatches(cmd, m_batches.data() + split, m_batches.size() - split, /*lightPass=*/false);
-    }
+    recordBatches(cmd, m_batches, /*lightPass=*/false);
 
     vkCmdEndRenderPass(cmd);
     vkEndCommandBuffer(cmd);
@@ -923,8 +865,8 @@ void Renderer2D::endFrame() {
     m_frameIndex = (m_frameIndex + 1) % kFramesInFlight;
 }
 
-void Renderer2D::recordBatches(VkCommandBuffer cmd, const Batch* batches, size_t count, bool lightPass) {
-    if (count == 0) return;
+void Renderer2D::recordBatches(VkCommandBuffer cmd, const std::vector<Batch>& batches, bool lightPass) {
+    if (batches.empty()) return;
     FrameResources& f = m_frames[m_frameIndex];
     VkDeviceSize offset = 0;
     vkCmdBindVertexBuffers(cmd, 0, 1, &f.vertexBuffer, &offset);
@@ -938,7 +880,7 @@ void Renderer2D::recordBatches(VkCommandBuffer cmd, const Batch* batches, size_t
     VkPipeline bound = VK_NULL_HANDLE;
     uint32_t boundClip = 0;  // the caller set the full-target scissor
     VkExtent2D extent = m_swapchain->extent();
-    for (const Batch& b : std::span(batches, count)) {
+    for (const Batch& b : batches) {
         if (!lightPass && b.clip != boundClip) {
             VkRect2D sc = b.clip ? m_clips[b.clip] : VkRect2D{{0, 0}, extent};
             if (sc.extent.width == 0 || sc.extent.height == 0) continue;  // fully clipped away

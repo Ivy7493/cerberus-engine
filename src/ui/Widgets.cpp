@@ -128,12 +128,16 @@ bool button(Clay_ElementId id, std::string_view label, const ButtonOptions& o) {
     Context& ui = *Context::current();
     const Theme& th = ui.theme;
     auto it = ui.interact(id, !o.disabled);
-    glm::vec4 bg = o.disabled                                 ? th.widget * glm::vec4(1, 1, 1, 0.5f)
-                   : it.held                                  ? th.widgetActive
-                   : it.hovered || (it.focused && ui.navVisible()) ? th.widgetHover
-                                                              : th.widget;
+    bool custom = o.color.r >= 0.0f;
+    glm::vec4 base = custom ? o.color : th.widget;
+    glm::vec4 hover = custom ? glm::mix(o.color, glm::vec4(1.0f, 0.95f, 0.85f, o.color.a), 0.18f) : th.widgetHover;
+    glm::vec4 press = custom ? o.color * glm::vec4(0.8f, 0.8f, 0.8f, 1.0f) : th.widgetActive;
+    glm::vec4 bg = o.disabled                                      ? base * glm::vec4(1, 1, 1, 0.5f)
+                   : it.held                                       ? press
+                   : it.hovered || (it.focused && ui.navVisible()) ? hover
+                                                                   : base;
     Clay_SizingAxis width = o.grow ? CLAY_SIZING_GROW(0) : o.width > 0.0f ? CLAY_SIZING_FIXED(ui.px(o.width)) : CLAY_SIZING_FIT(0);
-    auto padX = uint16_t(ui.px(o.small ? 10 : 18)), padY = uint16_t(ui.px(o.small ? 4 : 8));
+    auto padX = uint16_t(ui.px(o.small ? 10 : 18)), padY = uint16_t(ui.px(o.padY > 0.0f ? o.padY : o.small ? 4 : 8));
 
     Clay_ElementDeclaration d{};
     d.layout.sizing = {width, CLAY_SIZING_FIT(0)};
@@ -146,6 +150,7 @@ bool button(Clay_ElementId id, std::string_view label, const ButtonOptions& o) {
     TextStyle ts;
     ts.small = o.small;
     ts.dim = o.disabled;
+    if (o.textColor.r >= 0.0f) ts.color = o.disabled ? o.textColor * glm::vec4(1, 1, 1, 0.5f) : o.textColor;
     ts.align = CLAY_TEXT_ALIGN_CENTER;
     ts.wrap = CLAY_TEXT_WRAP_NONE;
     text(label, ts);
@@ -322,5 +327,115 @@ void tooltip(Clay_ElementId anchor, std::string_view s) {
     text(s, ts);
     close();
 }
+
+void tooltipAt(glm::vec2 pos, std::string_view s) {
+    beginTooltipAt(pos);
+    TextStyle ts;
+    ts.small = true;
+    text(s, ts);
+    endTooltip();
+}
+
+void endTooltip() { close(); }
+
+void beginTooltipAt(glm::vec2 pos) {
+    Context& ui = *Context::current();
+    const Theme& th = ui.theme;
+    Clay_ElementDeclaration d{};
+    auto padX = uint16_t(ui.px(12)), padY = uint16_t(ui.px(7));
+    d.layout.sizing = {CLAY_SIZING_FIT(0, ui.px(420)), CLAY_SIZING_FIT(0)};
+    d.layout.padding = {padX, padX, padY, padY};
+    d.backgroundColor = color(th.field * glm::vec4(1, 1, 1, 0.97f));
+    d.cornerRadius = radius(ui.px(th.radius));
+    // Below-right of the point, flipped left/up near the screen's far edges
+    // (judged roughly — the note's size isn't known until layout).
+    glm::vec2 screen = ui.renderer().screenSize();
+    bool left = pos.x > screen.x - ui.px(440), up = pos.y > screen.y - ui.px(120);
+    d.floating.offset = {pos.x + (left ? -ui.px(12) : ui.px(16)), pos.y + (up ? -ui.px(8) : ui.px(20))};
+    d.floating.zIndex = 1000;
+    d.floating.attachPoints = {left ? (up ? CLAY_ATTACH_POINT_RIGHT_BOTTOM : CLAY_ATTACH_POINT_RIGHT_TOP)
+                                    : (up ? CLAY_ATTACH_POINT_LEFT_BOTTOM : CLAY_ATTACH_POINT_LEFT_TOP),
+                               CLAY_ATTACH_POINT_LEFT_TOP};
+    d.floating.pointerCaptureMode = CLAY_POINTER_CAPTURE_MODE_PASSTHROUGH;
+    d.floating.attachTo = CLAY_ATTACH_TO_ROOT;
+    d.border = border(th.accent * glm::vec4(1, 1, 1, 0.5f), std::max(1.0f, ui.px(1)));
+    d.layout.childGap = uint16_t(ui.px(3));
+    d.layout.layoutDirection = CLAY_TOP_TO_BOTTOM;
+    openAuto(d);
+}
+
+Context::Interaction hitbox(Clay_ElementId id, const Rect& r, bool focusable, int16_t zIndex) {
+    Context& ui = *Context::current();
+    auto it = ui.interact(id, focusable);
+    Clay_ElementDeclaration d{};
+    d.layout.sizing = {CLAY_SIZING_FIXED(std::max(0.0f, r.size.x)), CLAY_SIZING_FIXED(std::max(0.0f, r.size.y))};
+    d.floating.offset = {r.pos.x, r.pos.y};
+    d.floating.zIndex = zIndex;
+    d.floating.attachTo = CLAY_ATTACH_TO_ROOT;
+    d.floating.pointerCaptureMode = CLAY_POINTER_CAPTURE_MODE_CAPTURE;
+    open(id, d);
+    close();
+    return it;
+}
+
+void beginPanel(Clay_ElementId id, const PanelOptions& o) {
+    Context& ui = *Context::current();
+    glm::vec2 screen = ui.renderer().screenSize();
+    if (o.dim) {  // a full-screen shade, its own layer just under the panel
+        Clay_ElementDeclaration shade{};
+        shade.layout.sizing = {CLAY_SIZING_FIXED(screen.x), CLAY_SIZING_FIXED(screen.y)};
+        shade.backgroundColor = color(o.dimColor);
+        shade.floating.zIndex = int16_t(o.zIndex - 1);
+        shade.floating.attachTo = CLAY_ATTACH_TO_ROOT;
+        shade.floating.pointerCaptureMode = CLAY_POINTER_CAPTURE_MODE_CAPTURE;
+        open(childId(id, CLAY_STRING("shade")), shade);
+        close();
+    }
+    float maxW = screen.x - ui.px(24), maxH = screen.y - ui.px(24);
+    Clay_ElementDeclaration d{};
+    Clay_SizingAxis w = o.width > 0.0f ? CLAY_SIZING_FIXED(std::min(ui.px(o.width), maxW)) : CLAY_SIZING_FIT(0, maxW);
+    Clay_SizingAxis h = o.height > 0.0f ? CLAY_SIZING_FIXED(std::min(ui.px(o.height), maxH))
+                                        : CLAY_SIZING_FIT(0, o.maxHeight > 0.0f ? std::min(ui.px(o.maxHeight), maxH) : maxH);
+    d.layout.sizing = {w, h};
+    auto px = uint16_t(ui.px(o.padX)), py = uint16_t(ui.px(o.padY));
+    d.layout.padding = {px, px, py, py};
+    d.layout.childGap = uint16_t(ui.px(o.gap));
+    d.layout.layoutDirection = CLAY_TOP_TO_BOTTOM;
+    d.custom = o.background;
+    if (!o.background.customData) {
+        d.backgroundColor = color(ui.theme.panel);
+        d.cornerRadius = radius(ui.px(ui.theme.radius * 2.0f));
+    }
+    if (o.scroll) d.clip = ui.scrollY();
+    // Anchored by the same point of the panel as of the screen (0.5 = centered).
+    auto point = [](glm::vec2 a) {
+        int col = a.x < 0.34f ? 0 : a.x < 0.67f ? 1 : 2, row = a.y < 0.34f ? 0 : a.y < 0.67f ? 1 : 2;
+        static const Clay_FloatingAttachPointType kPoints[3][3] = {
+            {CLAY_ATTACH_POINT_LEFT_TOP, CLAY_ATTACH_POINT_CENTER_TOP, CLAY_ATTACH_POINT_RIGHT_TOP},
+            {CLAY_ATTACH_POINT_LEFT_CENTER, CLAY_ATTACH_POINT_CENTER_CENTER, CLAY_ATTACH_POINT_RIGHT_CENTER},
+            {CLAY_ATTACH_POINT_LEFT_BOTTOM, CLAY_ATTACH_POINT_CENTER_BOTTOM, CLAY_ATTACH_POINT_RIGHT_BOTTOM}};
+        return kPoints[row][col];
+    };
+    Clay_FloatingAttachPointType p = point(o.anchor);
+    // Attach point = the panel's point to the root's same point; the offset
+    // then moves it from that screen anchor to the requested fraction.
+    glm::vec2 snapped{p == CLAY_ATTACH_POINT_LEFT_TOP || p == CLAY_ATTACH_POINT_LEFT_CENTER || p == CLAY_ATTACH_POINT_LEFT_BOTTOM ? 0.0f
+                      : p == CLAY_ATTACH_POINT_CENTER_TOP || p == CLAY_ATTACH_POINT_CENTER_CENTER || p == CLAY_ATTACH_POINT_CENTER_BOTTOM
+                          ? 0.5f
+                          : 1.0f,
+                      p == CLAY_ATTACH_POINT_LEFT_TOP || p == CLAY_ATTACH_POINT_CENTER_TOP || p == CLAY_ATTACH_POINT_RIGHT_TOP ? 0.0f
+                      : p == CLAY_ATTACH_POINT_LEFT_CENTER || p == CLAY_ATTACH_POINT_CENTER_CENTER || p == CLAY_ATTACH_POINT_RIGHT_CENTER
+                          ? 0.5f
+                          : 1.0f};
+    glm::vec2 off = (o.anchor - snapped) * screen + glm::vec2(ui.px(o.offset.x), ui.px(o.offset.y));
+    d.floating.offset = {off.x, off.y};
+    d.floating.zIndex = o.zIndex;
+    d.floating.attachPoints = {p, p};
+    d.floating.attachTo = CLAY_ATTACH_TO_ROOT;
+    d.floating.pointerCaptureMode = o.capture ? CLAY_POINTER_CAPTURE_MODE_CAPTURE : CLAY_POINTER_CAPTURE_MODE_PASSTHROUGH;
+    open(id, d);
+}
+
+void endPanel() { close(); }
 
 }  // namespace eng::ui

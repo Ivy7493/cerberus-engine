@@ -40,8 +40,7 @@ public:
     // Event-driven input that polling can't see, gathered between
     // pollEvents() calls and drained by Input::update(): typed text
     // (Unicode codepoints, layout- and IME-aware), the scroll wheel, and key
-    // presses including OS auto-repeat (for text editing). Registered before
-    // anything else hooks the window, so later hooks (ImGui) chain to these.
+    // presses including OS auto-repeat (for text editing).
     struct EventInput {
         std::vector<uint32_t> chars;
         std::vector<int> keyRepeats;  // GLFW_KEY_* for each press or repeat

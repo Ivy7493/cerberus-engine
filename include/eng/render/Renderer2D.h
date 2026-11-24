@@ -12,8 +12,6 @@
 #include <string_view>
 #include <vector>
 
-struct ImFont;
-struct ImGuiStyle;
 
 namespace eng {
 
@@ -60,7 +58,7 @@ struct Sprite {
     Space space = Space::World;
 };
 
-// Immediate-mode 2D sprite renderer + Dear ImGui overlay on one render pass.
+// Immediate-mode 2D sprite renderer (sprites, shapes, text) on one render pass.
 //
 // Coordinates are y-down in both spaces. Screen space is framebuffer
 // pixels; world space is whatever unit the game picks, mapped to the screen
@@ -68,18 +66,11 @@ struct Sprite {
 // the game sorts by depth itself — and consecutive sprites sharing a
 // texture/blend/space collapse into one draw call.
 //
-// Per frame: beginFrame() → draw*() / ImGui::* calls → endFrame().
+// Per frame: beginFrame() → draw*() (and eng::DrawList / eng::ui) → endFrame().
 class Renderer2D {
 public:
     struct Options {
         std::string appName = "eng";
-        // TTF used as ImGui's default font; falls back to ImGui's built-in
-        // bitmap font if empty or missing.
-        std::string fontPath;
-        float fontSize = 22.0f;
-        // Optional second, larger font (titles/big HUD numbers).
-        std::string titleFontPath;
-        float titleFontSize = 56.0f;
     };
 
     // Built-in textures, always present.
@@ -100,8 +91,6 @@ public:
     // pixels, like text); the default is nearest, for pixel art.
     TextureId createTexture(const uint8_t* rgba, uint32_t width, uint32_t height, bool linear = false);
     glm::ivec2 textureSize(TextureId id) const;
-    // For ImGui::Image(...) — same descriptor set the sprite pipeline binds.
-    void* imguiTexture(TextureId id) const;
 
     // Returns false if this frame should be skipped (minimized window /
     // swapchain being recreated) — don't call draw*/endFrame in that case.
@@ -131,6 +120,12 @@ public:
     // One textured triangle (`uv` per corner), for fans and arbitrary polygons.
     void drawTriangle(const glm::vec2 (&p)[3], const glm::vec2 (&uv)[3], const glm::vec4& color,
                       TextureId texture = kWhite, Space space = Space::World, BlendMode blend = BlendMode::Alpha);
+
+    // Untextured geometry with a color per corner (gradients, anti-aliasing
+    // fringes — what eng::DrawList builds on). A quad is p0..p3 in order
+    // around its edge; any convex quad works.
+    void drawTriangleColors(const glm::vec2 (&p)[3], const glm::vec4 (&colors)[3], Space space = Space::Screen);
+    void drawQuadColors(const glm::vec2 (&p)[4], const glm::vec4 (&colors)[4], Space space = Space::Screen);
 
     // ── UI shapes (Shapes.cpp) ──
     // Filled rectangle with per-corner radii (clamped to half the shorter
@@ -174,25 +169,12 @@ public:
     void endLights();
     void compositeLights();
 
-    ImFont* titleFont() const { return m_titleFont; }
-    // Pixel size the title font renders at right now (font size x UI scale).
-    float titleFontSize() const;
-
-    // UI scale (1 = authored at 1080p). Scales ImGui fonts and style sizes;
-    // fonts are rasterized at kFontOversample x so scaling up stays crisp.
-    // Call captureBaseStyle() once after customizing ImGui's style, then
-    // setUiScale() whenever the window size changes.
-    static constexpr float kFontOversample = 2.0f;
-    void captureBaseStyle();
-    void setUiScale(float scale);
+    // UI scale (1 = authored at 1080p), for whoever lays out UI (eng::ui,
+    // game HUDs) to multiply its sizes by. The renderer itself doesn't use it.
+    void setUiScale(float scale) { m_uiScale = scale; }
     float uiScale() const { return m_uiScale; }
 
-    // Everything drawn after this call (this frame) goes on top of Dear
-    // ImGui instead of under it — for eng::ui screens that must cover ImGui
-    // ones while both exist. Once per frame; later calls are ignored.
-    void beginAboveImGui();
-
-    // Writes the next presented frame (sprites + ImGui) to `path` as PNG.
+    // Writes the next presented frame to `path` as PNG.
     void requestScreenshot(const std::string& path) { m_screenshotPath = path; }
 
     VulkanContext& context() { return *m_context; }
@@ -250,10 +232,13 @@ private:
     void destroyLightmaps();
     void pushVertices(const Vertex* v, TextureId texture, BlendMode blend, Space space);
     void pushQuad(const glm::vec2 (&p)[4], const glm::vec4& color, Space space);  // untextured, any convex quad
-    void recordBatches(VkCommandBuffer cmd, const Batch* batches, size_t count, bool lightPass);
+    void recordBatches(VkCommandBuffer cmd, const std::vector<Batch>& batches, bool lightPass);
     void createFrameResources();
     void createIndexBuffer();
-    void initImGui(const Options& options);
+    void createDescriptorPool();
+    // A descriptor set binding `view` through `sampler` for the sprite pipeline.
+    VkDescriptorSet allocateTextureSet(VkSampler sampler, VkImageView view);
+    void freeTextureSet(VkDescriptorSet set);
     void recreateSwapchain();
     void createBuiltinTextures();
     void captureScreenshot();
@@ -286,7 +271,7 @@ private:
     glm::vec4 m_lightAmbient{0.5f};
     bool m_inLights = false;
     bool m_lightsUsed = false;
-    VkDescriptorPool m_imguiPool = VK_NULL_HANDLE;
+    VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
     VkBuffer m_indexBuffer = VK_NULL_HANDLE;
     VkDeviceMemory m_indexMemory = VK_NULL_HANDLE;
 
@@ -298,7 +283,6 @@ private:
     std::vector<Texture> m_textures;
     std::vector<Vertex> m_vertices;
     std::vector<Batch> m_batches;
-    size_t m_aboveImGui = SIZE_MAX;  // index of the first batch drawn after ImGui (SIZE_MAX: none)
     std::vector<VkRect2D> m_clips;       // this frame's clip rects; [0] is a placeholder for "none"
     std::vector<uint32_t> m_clipStack;  // indices into m_clips
     std::vector<std::unique_ptr<Font>> m_fonts;
@@ -306,10 +290,8 @@ private:
     glm::vec4 m_clearColor{0.05f, 0.05f, 0.07f, 1.0f};
     glm::vec2 m_camCenter{0.0f};
     float m_pixelsPerUnit = 1.0f;
-    ImFont* m_titleFont = nullptr;
     std::string m_screenshotPath;
     float m_uiScale = 1.0f;
-    std::unique_ptr<ImGuiStyle> m_baseStyle;
 };
 
 }  // namespace eng

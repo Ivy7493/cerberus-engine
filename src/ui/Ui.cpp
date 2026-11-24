@@ -39,6 +39,9 @@ Context* Context::current() { return s_current; }
 
 Context::Context(Renderer2D& renderer, Window& window, int32_t maxElements) : m_renderer(renderer), m_window(window) {
     Clay_SetMaxElementCount(maxElements);
+    // Long wrapped descriptions measure word by word; Clay's default cache
+    // (16k words) runs out on a screen full of them.
+    Clay_SetMaxMeasureTextCacheWordCount(maxElements * 8);
     uint32_t bytes = Clay_MinMemorySize();
     m_clayMemory = std::make_unique<char[]>(bytes);
     Clay_Arena arena = Clay_CreateArenaWithCapacityAndMemory(bytes, m_clayMemory.get());

@@ -89,6 +89,26 @@ struct ButtonOptions {
     bool grow = false;   // fill the parent's free width instead
     bool disabled = false;
     bool small = false;  // small font, less padding
+    float padY = 0.0f;   // authored vertical padding; 0 = the default
+    glm::vec4 color{-1.0f};      // fill (hover/press lighten it); r < 0 = the theme's
+    glm::vec4 textColor{-1.0f};  // r < 0 = the theme's
+};
+
+// Floating layers (modal panels, tooltips) sit above the main layout and
+// hitboxes; higher z draws on top and takes the pointer first.
+struct PanelOptions {
+    float width = 0.0f;         // authored px (clamped to the screen); 0 = fit
+    float height = 0.0f;        // authored px, fixed (clamped to the screen); 0 = fit
+    float maxHeight = 0.0f;     // authored px, when fitting; 0 = up to the screen
+    glm::vec2 anchor{0.5f};     // where on the screen (0–1); the panel's same point sits there
+    glm::vec2 offset{0.0f};     // authored px from the anchor
+    float padX = 34.0f, padY = 30.0f, gap = 9.0f;
+    int16_t zIndex = 100;
+    bool capture = true;        // block the pointer from layers below
+    bool dim = false;           // a full-screen shade under it (also captures)
+    glm::vec4 dimColor{0.0f, 0.0f, 0.02f, 0.6f};
+    Clay_CustomElementConfig background{};  // drawn behind the contents (e.g. a themed frame)
+    bool scroll = false;        // contents scroll when taller than maxHeight
 };
 
 class Context {
@@ -237,5 +257,21 @@ bool textField(Clay_ElementId id, std::string& value, std::string_view hint = {}
 // A small floating note under `anchor` (drawn above everything). Call when
 // you want it shown, e.g. while the anchor is hovered or nav-focused.
 void tooltip(Clay_ElementId anchor, std::string_view text);
+// The same at a screen position (e.g. next to the mouse), kept on screen.
+void tooltipAt(glm::vec2 screenPos, std::string_view text);
+// A tooltip with several lines/colors: declare its contents (ui::text...)
+// between these.
+void beginTooltipAt(glm::vec2 screenPos);
+void endTooltip();
+
+// An invisible, focusable box at an exact screen rectangle — for controls
+// the game draws itself (like ImGui's InvisibleButton). Floating at
+// `zIndex`, so it isn't moved by layout.
+Context::Interaction hitbox(Clay_ElementId id, const Rect& rect, bool focusable = true, int16_t zIndex = 1);
+
+// A floating panel: opens a layer; declare its contents, then endPanel().
+//   ui::beginPanel(CLAY_ID("name"), {.width = 440, .dim = true}); ...; ui::endPanel();
+void beginPanel(Clay_ElementId id, const PanelOptions& options = {});
+void endPanel();
 
 }  // namespace eng::ui
