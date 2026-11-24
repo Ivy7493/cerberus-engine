@@ -24,6 +24,7 @@
 #include "eng/ecs/Registry.h"
 
 #include <cstddef>
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <span>
@@ -118,6 +119,13 @@ public:
     const void* get(Entity e, ComponentId c) const;
     size_t count(ComponentId c) const { return m_stores[c].slots.size(); }
 
+    // Room for `n` of component c: adding one never moves the others (raw
+    // pointers and references stay valid, e.g. across spawns made while a
+    // loop holds one) as long as count(c) stays within reservedCount(c).
+    // Removing one still moves the last into its place.
+    void reserveComponents(ComponentId c, size_t n);
+    size_t reservedCount(ComponentId c) const { return m_stores[c].data.capacity() / std::max<size_t>(1, m_stores[c].size); }
+
     // ── Components, typed ──
     template <class T> ComponentId id() const;
     // Throws std::logic_error if `e` isn't alive (the untyped add returns nullptr).
@@ -126,6 +134,7 @@ public:
         if (!p) throw std::logic_error("World::add: entity isn't alive");
         return *static_cast<T*>(p);
     }
+    template <class T> void reserveComponents(size_t n) { reserveComponents(id<T>(), n); }
     template <class T> void remove(Entity e) { remove(e, id<T>()); }
     template <class T> bool has(Entity e) const { return has(e, id<T>()); }
     template <class T> T* get(Entity e) { return static_cast<T*>(get(e, id<T>())); }

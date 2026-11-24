@@ -149,6 +149,13 @@ Entity World::entityAt(uint16_t slot) const {
 
 // ── Components ───────────────────────────────────────────────────────────────
 
+void World::reserveComponents(ComponentId c, size_t n) {
+    Store& s = m_stores.at(c);
+    n = std::min<size_t>(n, m_cap);
+    s.slots.reserve(n);
+    s.data.reserve(n * s.size);
+}
+
 void* World::addToSlot(uint16_t slot, ComponentId c, const void* bytes) {
     Store& s = m_stores[c];
     const void* src = bytes ? bytes : m_reg.info(c).defaults.data();
