@@ -97,6 +97,20 @@ public:
     bool beginFrame();
     void endFrame();
 
+    // What the last completed frame (beginFrame … endFrame) cost and held —
+    // for the dev overlay (eng/dev/Overlay.h) and logs.
+    struct FrameStats {
+        uint32_t quads = 0;         // sprites, glyphs, UI shapes... (each triangle is a quad too)
+        uint32_t batches = 0;       // draw calls in the main pass (a texture/blend/space/clip change starts one)
+        uint32_t lightBatches = 0;  // draw calls in the lightmap pass
+        uint32_t droppedQuads = 0;  // past the vertex buffer's capacity: not drawn
+        uint32_t quadCapacity = 0;
+        float waitMs = 0.0f;    // beginFrame: waiting for this frame slot's previous GPU work and a swapchain image (vsync)
+        float submitMs = 0.0f;  // endFrame: upload, record, submit, present
+        uint64_t frame = 0;     // completed frames so far (unchanged while minimized: beginFrame returned false)
+    };
+    const FrameStats& lastFrameStats() const { return m_lastStats; }
+
     void setClearColor(const glm::vec4& c) { m_clearColor = c; }
 
     // World view: `center` lands mid-screen, `pixelsPerUnit` scales world
@@ -225,6 +239,15 @@ private:
 
     static constexpr int kFramesInFlight = 2;
     static constexpr uint32_t kMaxSprites = 65536;  // lights' shadow fans take a share
+    // Room for one more quad; counts it as dropped when there isn't.
+    bool quadFits() {
+        if (m_vertices.size() + 4 <= kMaxSprites * 4) return true;
+        ++m_droppedQuads;
+        return false;
+    }
+    uint32_t m_droppedQuads = 0;
+    float m_waitMs = 0.0f;
+    FrameStats m_lastStats;
 
     void createRenderPass();
     void createFramebuffers();

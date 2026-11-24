@@ -403,7 +403,7 @@ void beginPanel(Clay_ElementId id, const PanelOptions& o) {
     d.layout.layoutDirection = CLAY_TOP_TO_BOTTOM;
     d.custom = o.background;
     if (!o.background.customData) {
-        d.backgroundColor = color(ui.theme.panel);
+        d.backgroundColor = color(o.color.r >= 0.0f ? o.color : ui.theme.panel);
         d.cornerRadius = radius(ui.px(ui.theme.radius * 2.0f));
     }
     if (o.scroll) d.clip = ui.scrollY();

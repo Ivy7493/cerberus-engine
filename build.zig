@@ -46,6 +46,7 @@ const eng_sources = [_][]const u8{
     "src/ecs/LuaEcs.cpp",
     "src/ecs/Content.cpp",
     "src/ecs/Replication.cpp",
+    "src/dev/Overlay.cpp",
 };
 
 /// Lua 5.4's core and the libraries eng::Scripts exposes. Not io, os, debug
