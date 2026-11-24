@@ -1,6 +1,6 @@
 # ECS + Lua plan
 
-Status: phase 1 done, phase 2 next (branch `ecs-lua`).
+Status: phases 1 and 2 done (ECS core in `eng/ecs/`, tested by `tests/ecs_test.cpp`); phase 3, the Lua bridge, next (branch `ecs-lua`).
 
 ## Decisions
 
