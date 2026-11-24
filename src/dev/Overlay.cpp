@@ -7,6 +7,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <thread>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -195,6 +196,7 @@ void Overlay::sampleProcess(double now) {
         m_process.cpuPercent = (cpu - m_lastCpuSeconds) / (now - m_lastProcessSample) * 100.0;
     m_process.rssMb = rss;
     m_process.threads = threads;
+    m_process.cores = int(std::thread::hardware_concurrency());
     m_lastCpuSeconds = cpu;
     m_lastProcessSample = now;
 }
@@ -367,7 +369,11 @@ void Overlay::draw(ui::Context& ui) {
     // ── Process ──
     heading("Process");
     row(CLAY_ID("eng_dev_mem"), "memory", sv(ui.fmt("%.0f MB", m_process.rssMb)));
-    row(CLAY_ID("eng_dev_cpu"), "CPU", sv(ui.fmt("%.0f%% of a core", m_process.cpuPercent)));
+    if (m_process.cores > 0)
+        row(CLAY_ID("eng_dev_cpu"), "CPU",
+            sv(ui.fmt("%.0f%% of %d cores  (%.2f busy)", m_process.cpuPercent / m_process.cores, m_process.cores, m_process.cpuPercent / 100.0)));
+    else
+        row(CLAY_ID("eng_dev_cpu"), "CPU", sv(ui.fmt("%.2f cores busy", m_process.cpuPercent / 100.0)));
     if (m_process.threads) row(CLAY_ID("eng_dev_threads"), "threads", sv(ui.fmt("%d", m_process.threads)));
 
     // ── The game's ──

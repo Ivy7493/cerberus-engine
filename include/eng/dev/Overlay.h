@@ -113,7 +113,8 @@ public:
 
     struct ProcessStats {
         double rssMb = 0.0;       // resident / working set
-        double cpuPercent = 0.0;  // of one core (can pass 100 with threads)
+        double cpuPercent = 0.0;  // of one core: passes 100 when threads (audio, GPU driver, net) add up to more
+        int cores = 0;            // logical CPUs on the machine
         int threads = 0;          // 0 where unknown (Windows)
     };
     const ProcessStats& process() const { return m_process; }
