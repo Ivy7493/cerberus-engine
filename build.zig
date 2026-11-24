@@ -18,6 +18,7 @@
 //!   const eng = b.dependency("eng", .{ .target = target, .optimize = optimize, .steam = steam });
 //!   eng_build.link(b, exe, eng);
 //!   _ = eng_build.installSteamRuntime(b, eng, exe, b.path("steam_appid.txt"));
+//!   const bytecode = eng_build.compileScripts(b, eng, b.path("scripts"));  // release: .lua → .luac
 const std = @import("std");
 
 const eng_sources = [_][]const u8{
@@ -34,7 +35,27 @@ const eng_sources = [_][]const u8{
     "src/net/SteamPlatform.cpp",
     "src/net/SteamTransport.cpp",
     "src/net/LagTransport.cpp",
+    "src/script/Scripts.cpp",
 };
+
+/// Lua 5.4's core and the libraries eng::Scripts exposes. Not io, os, debug
+/// or package (loadlib), nor linit.c (Scripts opens what it wants), nor the
+/// lua/luac front ends.
+const lua_sources = [_][]const u8{
+    "lapi.c",    "lcode.c",   "lctype.c",  "ldebug.c",   "ldo.c",     "ldump.c",
+    "lfunc.c",   "lgc.c",     "llex.c",    "lmem.c",     "lobject.c", "lopcodes.c",
+    "lparser.c", "lstate.c",  "lstring.c", "ltable.c",   "ltm.c",     "lundump.c",
+    "lvm.c",     "lzio.c",    "lauxlib.c", "lbaselib.c", "lcorolib.c", "lmathlib.c",
+    "lstrlib.c", "ltablib.c", "lutf8lib.c",
+};
+const lua_public_headers = [_][]const u8{ "lua.h", "luaconf.h", "lauxlib.h", "lualib.h" };
+
+/// Lua is compiled as C++: errors become exceptions, so they unwind C++
+/// frames (destructors run) in bindings instead of longjmp()ing past them.
+/// The string-hash seed is constant: with the default (address + time) each
+/// state hashes differently, so pairs() order would differ between server
+/// and clients.
+const lua_flags = [_][]const u8{ "-std=c++20", "-Dluai_makeseed(L)=0u", "-w" };
 
 const imgui_sources = [_][]const u8{
     "imgui.cpp",
@@ -171,6 +192,22 @@ pub fn build(b: *std.Build) void {
     }
     mod.addIncludePath(gen.getDirectory());
 
+    // ── Lua 5.4 (built into eng; headers installed under lua/) ──────────────
+    const lua = b.dependency("lua", .{});
+    const lua_headers = luaHeaders(b, lua);
+    addLua(mod, lua, lua_headers);
+
+    // eng-luac: the bytecode compiler for release scripts, a host tool.
+    const luac_mod = b.createModule(.{
+        .target = b.graph.host,
+        .optimize = .ReleaseSafe,
+        .link_libc = true,
+        .link_libcpp = true,
+    });
+    addLua(luac_mod, lua, lua_headers);
+    luac_mod.addCSourceFile(.{ .file = b.path("tools/eng_luac.cpp"), .flags = &cxx_flags });
+    b.installArtifact(b.addExecutable(.{ .name = "eng-luac", .root_module = luac_mod }));
+
     // ── eng itself ───────────────────────────────────────────────────────────
     mod.addCSourceFiles(.{ .files = &eng_sources, .flags = &cxx_flags });
     // miniaudio's implementation TU trips plenty of warnings; keep eng quiet.
@@ -182,10 +219,46 @@ pub fn build(b: *std.Build) void {
     const lib = b.addLibrary(.{ .name = "eng", .linkage = .static, .root_module = mod });
     lib.installHeadersDirectory(b.path("include/eng"), "eng", .{});
     lib.installHeader(config_h, "eng/config.h");
+    lib.installHeadersDirectory(lua_headers.getDirectory().path(b, "lua"), "lua", .{});
     lib.installHeadersDirectory(imgui.path(""), "", .{ .include_extensions = &.{".h"} });
     lib.installHeadersDirectory(glfw.path("include/GLFW"), "GLFW", .{});
     if (steam) lib.installHeadersDirectory(b.path(steam_sdk ++ "/public/steam"), "steam", .{});
     b.installArtifact(lib);
+
+    // ── zig build test ───────────────────────────────────────────────────────
+    const test_mod = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true, .link_libcpp = true });
+    test_mod.addCSourceFile(.{ .file = b.path("tests/script_test.cpp"), .flags = &cxx_flags });
+    test_mod.addIncludePath(b.path("include"));
+    test_mod.addIncludePath(lua_headers.getDirectory());
+    test_mod.linkLibrary(lib);
+    const script_test = b.addExecutable(.{ .name = "script_test", .root_module = test_mod });
+    const run_test = b.addRunArtifact(script_test);
+    const compiled = b.addRunArtifact(b.addExecutable(.{ .name = "eng-luac-test", .root_module = luac_mod }));
+    compiled.addDirectoryArg(b.path("tests/scripts"));
+    run_test.addDirectoryArg(compiled.addOutputDirectoryArg("scripts"));
+    b.step("test", "Run eng's own tests (scripting)").dependOn(&run_test.step);
+}
+
+/// Lua's public headers under a lua/ prefix (<lua/lua.h>), as games see them.
+fn luaHeaders(b: *std.Build, lua: *std.Build.Dependency) *std.Build.Step.WriteFile {
+    const wf = b.addWriteFiles();
+    for (lua_public_headers) |h| _ = wf.addCopyFile(lua.path(b.fmt("src/{s}", .{h})), b.fmt("lua/{s}", .{h}));
+    return wf;
+}
+
+fn addLua(m: *std.Build.Module, lua: *std.Build.Dependency, headers: *std.Build.Step.WriteFile) void {
+    m.addCSourceFiles(.{ .root = lua.path("src"), .files = &lua_sources, .flags = &lua_flags, .language = .cpp });
+    m.addIncludePath(headers.getDirectory());
+}
+
+/// Compiles every .lua under `src_dir` to bytecode (same relative paths,
+/// .luac) with eng-luac, built from the same Lua sources as the runtime.
+/// Syntax errors fail the build. Install the result next to the game for
+/// release; in dev, point eng::Scripts at the source tree instead.
+pub fn compileScripts(b: *std.Build, eng_dep: *std.Build.Dependency, src_dir: std.Build.LazyPath) std.Build.LazyPath {
+    const run = b.addRunArtifact(eng_dep.artifact("eng-luac"));
+    run.addDirectoryArg(src_dir);
+    return run.addOutputDirectoryArg("scripts");
 }
 
 fn glfwFlags(is_windows: bool) []const []const u8 {

@@ -9,7 +9,8 @@ Status: phase 1 in progress (branch `ecs-lua`).
   to bytecode for release builds.
 - **Mods supported** — as Lua text, sandboxed.
 - **Components replicate** through the network protocol, driven by the component registry.
-- **Caps:** 256 entities total, 8 per prefab by default (overridable per prefab).
+- **Caps:** total entity cap configurable per `World` (up to 65535 — slots are `uint16`); 8 per prefab
+  by default (overridable per prefab).
 
 ## Runtime vs file-based
 
@@ -35,12 +36,15 @@ return {
 
 ## ECS core
 
-- **Entity = `uint16`**: 8-bit slot + 8-bit generation (stale handles detectable). Matches delve's
-  existing `uint16` enemy ids.
-- **Storage:** per component, a flat array of 256 indexed by slot + a 256-bit "has" mask. Queries AND
-  the masks and walk set bits: deterministic slot order, no sparse sets needed at this size. If the cap
-  grows, swap the storage behind the same API.
-- **Caps:** `spawn` returns a null entity when the 256 total or the prefab's `max` is reached (logged in
+- **Entity = `uint32`**: 16-bit slot + 16-bit generation (stale handles detectable). Slot `0xFFFF` is
+  reserved, so the cap is 1..65535. Fits a Lua integer, so Lua handles are plain numbers.
+- **Configurable cap** (`WorldConfig::maxEntities`, default 256): everything sized from it at creation,
+  no reallocation mid-game.
+- **Storage: sparse sets** per component — a `uint16` slot→dense index array sized to the cap (128 KB at
+  the 65535 max) + packed dense component data, so memory follows what's in use, not cap × size.
+  Queries walk the smallest set and check the others. Dense order follows add/remove history, which is
+  deterministic given a deterministic sim.
+- **Caps:** `spawn` returns a null entity when the total cap or the prefab's `max` is reached (logged in
   dev). Spawning is server-only, so it is deterministic.
 - **Not in the ECS:** bullets, particles, coins — high-count, short-lived; stay plain C++ arrays.
 - **Command buffer:** spawn/destroy during a system run is deferred to between systems.
@@ -83,8 +87,9 @@ return {
   schema hash.
 - Snapshots unreliable, delta-encoded against the client's last acked snapshot (server keeps a ring of
   ~32; falls back to a full snapshot):
-  - 256-bit alive mask (32 bytes)
-  - per changed entity: slot, prefab id on spawn, changed-component mask, per component a changed-field
+  - spawned and despawned slots as lists (varint slots: 1 byte under 128, 2 under 16384). A bitmask
+    of the whole cap would be 8 KB at 65535.
+  - per changed entity: slot (varint), prefab id on spawn, changed-component mask, per component a changed-field
     mask + values (`u8`/varint/int16 fixed-point via `ByteWriter`)
 - Keep packets ≲1200 bytes: `UdpTransport` relies on IP fragmentation for large messages (fine on
   loopback only). Full snapshots split by entity range; each piece applies independently.
@@ -95,7 +100,7 @@ return {
 1. **Build + script runtime:** Lua 5.4 in `build.zig.zon` (constant `luai_makeseed`), host `luac` +
    bytecode compile step for consumers, `eng/script` (states, dev/release loaders, sandbox, instruction
    and memory limits, tracebacks to `ENG_LOG`, hot reload).
-2. **ECS core:** entities, flat storage + masks, prefab caps, command buffer, registry with net metadata.
+2. **ECS core:** entities, configurable cap, sparse-set storage, prefab caps, command buffer, registry with net metadata.
 3. **Lua bridge:** entity userdata, reflected field access, `spawn`/`destroy`/`query`/events,
    Lua-defined components.
 4. **Prefabs + mods:** prefab loading/validation, mod discovery and load order, overrides, manifest and

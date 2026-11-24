@@ -12,6 +12,10 @@
             .url = "https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.zip",
             .hash = "N-V-__8AAGILeQBiX6fOeXM8aImETLAuofbkuBtGo_q6zsGB",
         },
+        .lua = .{
+            .url = "https://www.lua.org/ftp/lua-5.4.8.tar.gz",
+            .hash = "N-V-__8AAKEzFAAA695b9LXBhUSVK5MAV_VKSm1mEj3Acbze",
+        },
     },
     .paths = .{
         "build.zig",
