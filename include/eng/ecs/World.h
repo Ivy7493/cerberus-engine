@@ -132,6 +132,24 @@ public:
     // The same by ids (for Lua): fn(Entity).
     void query(std::span<const ComponentId> components, const std::function<void(Entity)>& fn);
 
+    // Every T, packed, in dense order (what each<T>() walks), and the entity
+    // owning the i-th: for code that wants plain loops or indices over one
+    // component type (a game's container facade). Valid until T is next
+    // added or removed; adding/removing T while looping is the caller's bug,
+    // as with a vector.
+    template <class T> std::span<T> raw() {
+        Store& s = m_stores[id<T>()];
+        return {reinterpret_cast<T*>(s.data.data()), s.slots.size()};
+    }
+    template <class T> std::span<const T> raw() const {
+        const Store& s = m_stores[id<T>()];
+        return {reinterpret_cast<const T*>(s.data.data()), s.slots.size()};
+    }
+    Entity denseEntity(ComponentId c, size_t i) const {
+        uint16_t slot = m_stores[c].slots[i];
+        return makeEntity(slot, m_generation[slot]);
+    }
+
     // ── Deferred changes ──
     Commands& commands() { return m_commands; }
     void flush();  // applies commands() in order; not while iterating

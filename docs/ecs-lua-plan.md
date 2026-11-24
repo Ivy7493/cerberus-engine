@@ -1,8 +1,8 @@
 # ECS + Lua plan
 
-Status: phases 1–5 done (ECS core, Lua bridge, content/mod loading and replication in `eng/ecs/`, tested
-by `tests/ecs_test.cpp`, `tests/luaecs_test.cpp`, `tests/content_test.cpp` and
-`tests/replication_test.cpp`); phase 6, the delve pilot, next (branch `ecs-lua`).
+Status: all six phases done. ECS core, Lua bridge, content/mod loading and replication in `eng/ecs/`
+(tested by `tests/ecs_test.cpp`, `tests/luaecs_test.cpp`, `tests/content_test.cpp`,
+`tests/replication_test.cpp`); the delve pilot on delve's `ecs-moth` branch (its `docs/scripting.md`).
 
 ## Decisions
 
@@ -118,4 +118,8 @@ return {
    `World::spawnAt` so handles match; the handshake itself is the game's message carrying
    `ContentManifest`.) snapshot ring, delta encoding, split packets, client interpolation, schema/mod handshake;
    tested under `LagTransport`.
-6. **Delve pilot:** one enemy type end to end, `delve_simtest` green.
+6. **Delve pilot:** one enemy type end to end, `delve_simtest` green. *As built:* the Moth lives only in
+   an `ecs::World` — its `Enemy` record is a component, behind delve's `EnemyList` (vector + ECS via
+   `World::raw`), so combat/statuses/net/rendering are unchanged — with its tuning in a `Content`
+   prefab and its steering in `scripts/ai/moth.lua`. Not used there: replication (delve keeps full
+   stateless snapshots) and mods (no mod folder yet).

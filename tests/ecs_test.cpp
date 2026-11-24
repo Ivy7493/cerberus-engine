@@ -213,6 +213,27 @@ int main() {
     testPrefabsAndComponents(r);
     testIteration(r);
     testDeterminism(r);
+    // ── raw(): the packed array and its owners ──
+    {
+        Registry r;
+        registerAll(r);
+        r.finalize();
+        World w(r, {.maxEntities = 16});
+        Entity a = w.spawn(), b = w.spawn(), c = w.spawn();
+        w.add<Health>(a, Health{1, 0.0f});
+        w.add<Health>(c, Health{3, 0.0f});
+        w.add<Health>(b, Health{2, 0.0f});
+        auto hs = w.raw<Health>();
+        CHECK(hs.size() == 3 && hs[0].hp == 1 && hs[1].hp == 3 && hs[2].hp == 2);
+        CHECK(w.denseEntity(w.id<Health>(), 1) == c);
+        hs[1].hp = 30;
+        CHECK(w.get<Health>(c)->hp == 30);
+        w.remove<Health>(a);  // swap-remove: the last moves into the hole
+        CHECK(w.raw<Health>().size() == 2 && w.denseEntity(w.id<Health>(), 0) == b);
+        const World& cw = w;
+        CHECK(cw.raw<Health>()[1].hp == 30);
+    }
+
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;
