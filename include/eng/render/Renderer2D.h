@@ -71,6 +71,7 @@ class Renderer2D {
 public:
     struct Options {
         std::string appName = "eng";
+        bool vsync = false;  // see setVsync
     };
 
     // Built-in textures, always present.
@@ -110,6 +111,14 @@ public:
         uint64_t frame = 0;     // completed frames so far (unchanged while minimized: beginFrame returned false)
     };
     const FrameStats& lastFrameStats() const { return m_lastStats; }
+
+    // VSync on: frames wait for the display (FIFO). Off: uncapped — MAILBOX
+    // (no tearing) where the driver has it, else IMMEDIATE (may tear). A
+    // change rebuilds the swapchain at the next beginFrame(). Cap an
+    // uncapped frame rate with eng::FrameLimiter.
+    void setVsync(bool on);
+    bool vsync() const;
+    const char* presentModeName() const;  // what's actually in use: "FIFO (vsync)", "MAILBOX", "IMMEDIATE"
 
     void setClearColor(const glm::vec4& c) { m_clearColor = c; }
 
@@ -251,6 +260,7 @@ private:
     TextureId m_builtinAtlas = kWhite;
     glm::vec4 m_builtinUv[3]{};
     float m_waitMs = 0.0f;
+    bool m_swapchainDirty = false;  // setVsync changed the present mode
     FrameStats m_lastStats;
 
     void createRenderPass();

@@ -25,6 +25,7 @@ const eng_sources = [_][]const u8{
     "src/core/CrashLog.cpp",
     "src/platform/Window.cpp",
     "src/platform/Input.cpp",
+    "src/platform/FrameLimiter.cpp",
     "src/render/VulkanContext.cpp",
     "src/render/Swapchain.cpp",
     "src/render/VulkanUtils.cpp",

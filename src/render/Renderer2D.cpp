@@ -55,6 +55,10 @@ Renderer2D::Renderer2D(Window& window, const Options& options) : m_window(window
     m_context = std::make_unique<VulkanContext>(window.handle(), options.appName.c_str());
     m_swapchain = std::make_unique<Swapchain>(*m_context, window.handle(), VK_SAMPLE_COUNT_1_BIT,
                                               /*srgb=*/false, /*depth=*/false);
+    if (options.vsync) {  // before anything is built on the swapchain
+        m_swapchain->setVsync(true);
+        m_swapchain->recreate();
+    }
 
     VkCommandPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -787,6 +791,24 @@ void Renderer2D::compositeLights() {
 
 // ── Frame ────────────────────────────────────────────────────────────────────
 
+void Renderer2D::setVsync(bool on) {
+    if (on == m_swapchain->vsync()) return;
+    m_swapchain->setVsync(on);
+    m_swapchainDirty = true;
+}
+
+bool Renderer2D::vsync() const { return m_swapchain->vsync(); }
+
+const char* Renderer2D::presentModeName() const {
+    switch (m_swapchain->presentMode()) {
+        case VK_PRESENT_MODE_FIFO_KHR: return "FIFO (vsync)";
+        case VK_PRESENT_MODE_FIFO_RELAXED_KHR: return "FIFO relaxed";
+        case VK_PRESENT_MODE_MAILBOX_KHR: return "MAILBOX (uncapped, no tearing)";
+        case VK_PRESENT_MODE_IMMEDIATE_KHR: return "IMMEDIATE (uncapped, may tear)";
+        default: return "other";
+    }
+}
+
 void Renderer2D::recreateSwapchain() {
     vkDeviceWaitIdle(m_context->device());
     destroyFramebuffers();
@@ -801,7 +823,10 @@ bool Renderer2D::beginFrame() {
     // Swapchain::recreate() block in glfwWaitEvents — the caller may be a
     // host whose simulation must keep ticking for everyone else.
     if (m_window.framebufferWidth() == 0 || m_window.framebufferHeight() == 0) return false;
-    if (m_window.consumeResized()) recreateSwapchain();
+    if (m_window.consumeResized() || m_swapchainDirty) {
+        m_swapchainDirty = false;
+        recreateSwapchain();
+    }
 
     FrameResources& f = m_frames[m_frameIndex];
     VkDevice dev = m_context->device();

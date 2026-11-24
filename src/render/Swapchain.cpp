@@ -83,11 +83,10 @@ VkSurfaceFormatKHR Swapchain::chooseSurfaceFormat(const std::vector<VkSurfaceFor
 }
 
 VkPresentModeKHR Swapchain::choosePresentMode(const std::vector<VkPresentModeKHR>& modes) const {
-    for (const auto& mode : modes) {
-        if (mode == VK_PRESENT_MODE_MAILBOX_KHR) {
-            return mode;
-        }
-    }
+    if (m_vsync) return VK_PRESENT_MODE_FIFO_KHR;  // the only mode every driver must support
+    for (VkPresentModeKHR want : {VK_PRESENT_MODE_MAILBOX_KHR, VK_PRESENT_MODE_IMMEDIATE_KHR})
+        for (VkPresentModeKHR mode : modes)
+            if (mode == want) return mode;
     return VK_PRESENT_MODE_FIFO_KHR;
 }
 
@@ -113,6 +112,7 @@ void Swapchain::create() {
 
     VkSurfaceFormatKHR surfaceFormat = chooseSurfaceFormat(support.formats);
     VkPresentModeKHR presentMode = choosePresentMode(support.presentModes);
+    m_presentMode = presentMode;
     VkExtent2D extent = chooseExtent(support.capabilities);
 
     uint32_t imageCount = support.capabilities.minImageCount + 1;
