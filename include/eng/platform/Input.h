@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <vector>
 
 struct GLFWwindow;
 
@@ -36,6 +37,15 @@ public:
     bool mousePressed(int button) const;
     double mouseX() const { return m_mouseX; }  // framebuffer pixels
     double mouseY() const { return m_mouseY; }
+    // Scroll wheel this frame (notches; +y is away from the user / up).
+    float scrollX() const { return m_scrollX; }
+    float scrollY() const { return m_scrollY; }
+
+    // Text typed this frame as Unicode codepoints (respects keyboard layout,
+    // shift, dead keys and IME), and keys that went down or auto-repeated
+    // (for text editing: holding Backspace keeps deleting).
+    const std::vector<uint32_t>& typedChars() const { return m_typed; }
+    bool keyTyped(int key) const;
 
     // Gamepad buttons use GLFW_GAMEPAD_BUTTON_*, axes GLFW_GAMEPAD_AXIS_*.
     // Axes have a radial-ish deadzone applied (per-axis, `kDeadzone`).
@@ -58,6 +68,9 @@ private:
     std::array<bool, kMaxMouseButtons> m_prevMouse{};
     std::array<Gamepad, kMaxGamepads> m_pads{};
     double m_mouseX = 0.0, m_mouseY = 0.0;
+    float m_scrollX = 0.0f, m_scrollY = 0.0f;
+    std::vector<uint32_t> m_typed;
+    std::vector<int> m_keyRepeats;
     bool m_lastWasPad = false;
 };
 

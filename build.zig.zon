@@ -12,6 +12,10 @@
             .url = "https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.zip",
             .hash = "N-V-__8AAGILeQBiX6fOeXM8aImETLAuofbkuBtGo_q6zsGB",
         },
+        .clay = .{
+            .url = "https://github.com/nicbarker/clay/archive/e6cc36941ab2af5d81107617039d6f527a1c660b.tar.gz",
+            .hash = "N-V-__8AAJD1dwCrm4WaLcFFKlMrXQwYNnAXSMjKC_4L1L9O",
+        },
     },
     .paths = .{
         "build.zig",
@@ -20,5 +24,6 @@
         "src",
         "shaders",
         "third_party",
+        "examples",
     },
 }

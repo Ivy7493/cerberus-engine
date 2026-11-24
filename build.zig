@@ -29,6 +29,10 @@ const eng_sources = [_][]const u8{
     "src/render/VulkanUtils.cpp",
     "src/render/Renderer2D.cpp",
     "src/render/StbImage.cpp",
+    "src/render/Text.cpp",
+    "src/render/Shapes.cpp",
+    "src/ui/Ui.cpp",
+    "src/ui/Widgets.cpp",
     "src/net/UdpSocket.cpp",
     "src/net/UdpTransport.cpp",
     "src/net/SteamPlatform.cpp",
@@ -160,6 +164,13 @@ pub fn build(b: *std.Build) void {
     mod.addIncludePath(imgui.path(""));
     mod.addIncludePath(imgui.path("backends"));
 
+    // ── Clay (UI layout; games use its CLAY() macros through <clay.h>) ───────
+    // Its implementation is plain C99, compiled once here; the header also
+    // compiles as C++20, which is how eng::ui and games include it.
+    const clay = b.dependency("clay", .{});
+    mod.addCSourceFile(.{ .file = b.path("src/ui/Clay.c"), .flags = &.{ "-std=c99", "-w" } });
+    mod.addIncludePath(clay.path(""));
+
     // ── Shaders → SPIR-V embedded as C arrays (no runtime shader files) ──────
     const gen = b.addWriteFiles();
     for (shaders) |shader| {
@@ -184,8 +195,30 @@ pub fn build(b: *std.Build) void {
     lib.installHeader(config_h, "eng/config.h");
     lib.installHeadersDirectory(imgui.path(""), "", .{ .include_extensions = &.{".h"} });
     lib.installHeadersDirectory(glfw.path("include/GLFW"), "GLFW", .{});
+    lib.installHeader(clay.path("clay.h"), "clay.h");
     if (steam) lib.installHeadersDirectory(b.path(steam_sdk ++ "/public/steam"), "steam", .{});
     b.installArtifact(lib);
+
+    // ── ui-demo: eng::ui's showcase and visual check (Linux dev builds) ─────
+    //   zig build ui-demo [-- --screenshot out.png] [-- --fonts dir]
+    // Linked like link() does for games, but against this build's libeng.
+    if (!is_windows) {
+        const demo_mod = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true, .link_libcpp = true });
+        demo_mod.addCSourceFile(.{ .file = b.path("examples/ui_demo.cpp"), .flags = &cxx_flags });
+        demo_mod.linkLibrary(lib);
+        addPublicMacros(demo_mod, false);
+        for (pc_headers_common) |pkg| addPkgConfigIncludes(b, demo_mod, pkg);
+        if (steam) {
+            demo_mod.addObjectFile(b.path(steamLib(false, .link)));
+            demo_mod.addRPath(b.path(steam_sdk ++ "/redistributable_bin/linux64"));
+        }
+        demo_mod.addObjectFile(.{ .cwd_relative = vulkanLoader(b) });
+        const demo = b.addExecutable(.{ .name = "ui-demo", .root_module = demo_mod });
+        const run_demo = b.addRunArtifact(demo);
+        run_demo.setCwd(b.path("."));
+        run_demo.addPassthruArgs();
+        b.step("ui-demo", "Build and run eng::ui's demo").dependOn(&run_demo.step);
+    }
 }
 
 fn glfwFlags(is_windows: bool) []const []const u8 {

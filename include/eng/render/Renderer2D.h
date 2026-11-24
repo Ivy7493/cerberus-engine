@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 struct ImFont;
@@ -21,6 +22,26 @@ class VulkanContext;
 class Swapchain;
 
 using TextureId = uint32_t;
+using FontId = uint32_t;
+constexpr FontId kNoFont = UINT32_MAX;
+
+// Axis-aligned rectangle by its top-left corner (y-down), for UI shapes.
+struct Rect {
+    glm::vec2 pos{0.0f};
+    glm::vec2 size{0.0f};
+};
+// Per-corner radii and per-edge widths, as UI layout (Clay) hands them over.
+struct CornerRadii {
+    float topLeft = 0.0f, topRight = 0.0f, bottomRight = 0.0f, bottomLeft = 0.0f;
+};
+struct EdgeWidths {
+    float left = 0.0f, top = 0.0f, right = 0.0f, bottom = 0.0f;
+};
+struct FontMetrics {
+    float ascent = 0.0f;      // baseline below the line's top
+    float descent = 0.0f;     // below the baseline (positive)
+    float lineHeight = 0.0f;  // ascent + descent + line gap
+};
 
 // Modulate2x: dst × src × 2, so mid-grey (0.5) leaves what's under it as it
 // was, darker greys darken and lighter ones brighten (up to double).
@@ -75,7 +96,9 @@ public:
     // PNG (or anything stb_image reads). Returns kWhite and logs on failure,
     // so a missing art file shows as a white box rather than crashing.
     TextureId loadTexture(const std::string& path);
-    TextureId createTexture(const uint8_t* rgba, uint32_t width, uint32_t height);
+    // `linear`: bilinear filtering (smooth when scaled or placed between
+    // pixels, like text); the default is nearest, for pixel art.
+    TextureId createTexture(const uint8_t* rgba, uint32_t width, uint32_t height, bool linear = false);
     glm::ivec2 textureSize(TextureId id) const;
     // For ImGui::Image(...) — same descriptor set the sprite pipeline binds.
     void* imguiTexture(TextureId id) const;
@@ -108,6 +131,37 @@ public:
     // One textured triangle (`uv` per corner), for fans and arbitrary polygons.
     void drawTriangle(const glm::vec2 (&p)[3], const glm::vec2 (&uv)[3], const glm::vec4& color,
                       TextureId texture = kWhite, Space space = Space::World, BlendMode blend = BlendMode::Alpha);
+
+    // ── UI shapes (Shapes.cpp) ──
+    // Filled rectangle with per-corner radii (clamped to half the shorter
+    // side), and a border inset into `r` with per-edge widths following the
+    // same corners. Not anti-aliased.
+    void drawRoundedRect(const Rect& r, const CornerRadii& radii, const glm::vec4& color,
+                         Space space = Space::Screen);
+    void drawRoundedBorder(const Rect& r, const CornerRadii& radii, const EdgeWidths& widths,
+                           const glm::vec4& color, Space space = Space::Screen);
+
+    // ── Clipping ──
+    // Screen-pixel scissor applied to everything drawn until the matching
+    // popClip(), in either space. Nested clips intersect.
+    void pushClip(const Rect& screenRect);
+    void popClip();
+
+    // ── Text (Text.cpp) ──
+    // TrueType/OpenType fonts via stb_truetype. Glyphs are rasterized per
+    // integer pixel size on first use (Latin-1 plus common punctuation,
+    // arrows and math symbols; anything else draws as '?'), 2x horizontally
+    // oversampled and bilinear, so spacing stays even at small sizes; screen
+    // text sits on whole-pixel rows. loadFont returns kNoFont
+    // and logs if the file can't be read; text in kNoFont draws nothing.
+    FontId loadFont(const std::string& path);
+    FontMetrics fontMetrics(FontId font, float pixelSize);
+    // Width of the widest line (lines split on '\n') and lines × lineHeight.
+    glm::vec2 measureText(FontId font, float pixelSize, std::string_view utf8, float letterSpacing = 0.0f);
+    // `topLeft` is the top of the first line. In Space::World, `pixelSize`
+    // is in world units and glyphs are rasterized for the current zoom.
+    void drawText(FontId font, float pixelSize, const glm::vec2& topLeft, const glm::vec4& color,
+                  std::string_view utf8, Space space = Space::Screen, float letterSpacing = 0.0f);
 
     // ── Lighting ──
     // A screen-covering lightmap (half resolution, linearly filtered),
@@ -148,9 +202,14 @@ private:
         TextureId texture;
         BlendMode blend;
         Space space;
+        uint32_t clip;  // index into m_clips; 0 = whole target
         uint32_t firstIndex;
         uint32_t indexCount;
     };
+    struct Font;  // src/render/Font.h
+    struct FontSize;
+    // The rasterization of `font` at `px` pixels (clamped), baked on first use.
+    const FontSize* fontAtSize(FontId font, int px);
     struct Texture {
         vkutil::TextureResource res;
         VkDescriptorSet descriptor = VK_NULL_HANDLE;
@@ -185,6 +244,7 @@ private:
     void createLightmaps();
     void destroyLightmaps();
     void pushVertices(const Vertex* v, TextureId texture, BlendMode blend, Space space);
+    void pushQuad(const glm::vec2 (&p)[4], const glm::vec4& color, Space space);  // untextured, any convex quad
     void recordBatches(VkCommandBuffer cmd, const std::vector<Batch>& batches, bool lightPass);
     void createFrameResources();
     void createIndexBuffer();
@@ -233,6 +293,9 @@ private:
     std::vector<Texture> m_textures;
     std::vector<Vertex> m_vertices;
     std::vector<Batch> m_batches;
+    std::vector<VkRect2D> m_clips;       // this frame's clip rects; [0] is a placeholder for "none"
+    std::vector<uint32_t> m_clipStack;  // indices into m_clips
+    std::vector<std::unique_ptr<Font>> m_fonts;
 
     glm::vec4 m_clearColor{0.05f, 0.05f, 0.07f, 1.0f};
     glm::vec2 m_camCenter{0.0f};

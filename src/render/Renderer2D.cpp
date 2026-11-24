@@ -5,6 +5,7 @@
 #include "eng/render/Swapchain.h"
 #include "eng/render/VulkanContext.h"
 #include "eng/render/VulkanUtils.h"
+#include "Font.h"
 
 #include <GLFW/glfw3.h>
 #include <backends/imgui_impl_glfw.h>
@@ -73,6 +74,7 @@ Renderer2D::Renderer2D(Window& window, const Options& options) : m_window(window
     createLightmaps();  // after ImGui (its descriptor sets) and the builtins (fixed ids)
 
     m_vertices.reserve(kMaxSprites * 4);
+    m_clips.assign(1, VkRect2D{});
 }
 
 Renderer2D::~Renderer2D() {
@@ -566,12 +568,12 @@ void Renderer2D::setUiScale(float scale) {
 
 // ── Textures ─────────────────────────────────────────────────────────────────
 
-TextureId Renderer2D::createTexture(const uint8_t* rgba, uint32_t width, uint32_t height) {
+TextureId Renderer2D::createTexture(const uint8_t* rgba, uint32_t width, uint32_t height, bool linear) {
     Texture tex;
     // No mips: pixel art is drawn at integer-ish scales and should stay
     // nearest-filtered at every size.
     tex.res = vkutil::createTextureFromPixels(*m_context, m_commandPool, rgba, width, height,
-                                              /*generateMips=*/false);
+                                              /*generateMips=*/false, linear);
     tex.descriptor = ImGui_ImplVulkan_AddTexture(tex.res.sampler, tex.res.view,
                                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     tex.width = width;
@@ -646,16 +648,50 @@ void Renderer2D::pushVertices(const Vertex* v, TextureId texture, BlendMode blen
     m_vertices.insert(m_vertices.end(), v, v + 4);
 
     TextureId tex = texture < m_textures.size() ? texture : kWhite;
+    // Clips are a screen/UI thing; the lightmap pass ignores them.
+    uint32_t clip = m_inLights || m_clipStack.empty() ? 0 : m_clipStack.back();
     std::vector<Batch>& batches = m_inLights ? m_lightBatches : m_batches;
     if (!batches.empty()) {
         Batch& last = batches.back();
-        if (last.texture == tex && last.blend == blend && last.space == space &&
+        if (last.texture == tex && last.blend == blend && last.space == space && last.clip == clip &&
             last.firstIndex + last.indexCount == firstIndex) {
             last.indexCount += 6;
             return;
         }
     }
-    batches.push_back({tex, blend, space, firstIndex, 6});
+    batches.push_back({tex, blend, space, clip, firstIndex, 6});
+}
+
+void Renderer2D::pushQuad(const glm::vec2 (&p)[4], const glm::vec4& color, Space space) {
+    if (m_vertices.size() + 4 > kMaxSprites * 4) return;
+    glm::vec2 uv(0.5f);
+    Vertex v[4] = {{p[0], uv, color}, {p[1], uv, color}, {p[2], uv, color}, {p[3], uv, color}};
+    pushVertices(v, kWhite, BlendMode::Alpha, space);
+}
+
+// ── Clipping ─────────────────────────────────────────────────────────────────
+
+void Renderer2D::pushClip(const Rect& r) {
+    float x0 = std::floor(r.pos.x), y0 = std::floor(r.pos.y);
+    float x1 = std::ceil(r.pos.x + r.size.x), y1 = std::ceil(r.pos.y + r.size.y);
+    glm::vec2 screen = screenSize();
+    x0 = std::max(x0, 0.0f), y0 = std::max(y0, 0.0f);
+    x1 = std::min(x1, screen.x), y1 = std::min(y1, screen.y);
+    if (!m_clipStack.empty()) {  // nested: intersect with the enclosing clip
+        const VkRect2D& p = m_clips[m_clipStack.back()];
+        x0 = std::max(x0, float(p.offset.x)), y0 = std::max(y0, float(p.offset.y));
+        x1 = std::min(x1, float(p.offset.x + int32_t(p.extent.width)));
+        y1 = std::min(y1, float(p.offset.y + int32_t(p.extent.height)));
+    }
+    VkRect2D rect{};
+    rect.offset = {int32_t(x0), int32_t(y0)};
+    rect.extent = {uint32_t(std::max(0.0f, x1 - x0)), uint32_t(std::max(0.0f, y1 - y0))};
+    m_clips.push_back(rect);
+    m_clipStack.push_back(uint32_t(m_clips.size() - 1));
+}
+
+void Renderer2D::popClip() {
+    if (!m_clipStack.empty()) m_clipStack.pop_back();
 }
 
 void Renderer2D::drawTriangle(const glm::vec2 (&p)[3], const glm::vec2 (&uv)[3], const glm::vec4& color,
@@ -769,6 +805,8 @@ bool Renderer2D::beginFrame() {
     m_vertices.clear();
     m_batches.clear();
     m_lightBatches.clear();
+    m_clips.resize(1);
+    m_clipStack.clear();
     m_inLights = false;
     m_lightsUsed = false;
 
@@ -883,7 +921,15 @@ void Renderer2D::recordBatches(VkCommandBuffer cmd, const std::vector<Batch>& ba
     PushConstants worldPc{2.0f * m_pixelsPerUnit / size, -2.0f * m_camCenter * m_pixelsPerUnit / size};
 
     VkPipeline bound = VK_NULL_HANDLE;
+    uint32_t boundClip = 0;  // the caller set the full-target scissor
+    VkExtent2D extent = m_swapchain->extent();
     for (const Batch& b : batches) {
+        if (!lightPass && b.clip != boundClip) {
+            VkRect2D sc = b.clip ? m_clips[b.clip] : VkRect2D{{0, 0}, extent};
+            if (sc.extent.width == 0 || sc.extent.height == 0) continue;  // fully clipped away
+            vkCmdSetScissor(cmd, 0, 1, &sc);
+            boundClip = b.clip;
+        }
         VkPipeline p;
         if (lightPass) p = b.blend == BlendMode::Additive ? m_lightPipelineAdditive : m_lightPipelineAlpha;
         else if (b.blend == BlendMode::Additive) p = m_pipelineAdditive;
