@@ -1,7 +1,8 @@
 # ECS + Lua plan
 
-Status: phases 1–3 done (ECS core and the Lua bridge in `eng/ecs/`, tested by `tests/ecs_test.cpp` and
-`tests/luaecs_test.cpp`); phase 4, prefabs + mods, next (branch `ecs-lua`).
+Status: phases 1–4 done (ECS core, Lua bridge and content/mod loading in `eng/ecs/`, tested by
+`tests/ecs_test.cpp`, `tests/luaecs_test.cpp` and `tests/content_test.cpp`); phase 5, net, next (branch
+`ecs-lua`).
 
 ## Decisions
 
@@ -105,7 +106,10 @@ return {
 3. **Lua bridge:** (`ecs::LuaEcs`; entities are plain integers rather than userdata, components are
    reflected refs) entity handles, reflected field access, `spawn`/`destroy`/`query`/events,
    Lua-defined components.
-4. **Prefabs + mods:** prefab loading/validation, mod discovery and load order, overrides, manifest and
+4. **Prefabs + mods:** (`ecs::Content`: packs with `mod.lua`/`components.lua`/`prefabs/**`/`init.lua`;
+   prefabs named by path, replaced or `patch = true` merged, defined sorted by name; `ContentManifest` +
+   `diff()` for the join handshake. Not yet: hot-reloading prefabs into a live world, disabling a mod
+   whose handlers fault at runtime.) prefab loading/validation, mod discovery and load order, overrides, manifest and
    hashes.
 5. **Net:** snapshot ring, delta encoding, split packets, client interpolation, schema/mod handshake;
    tested under `LagTransport`.

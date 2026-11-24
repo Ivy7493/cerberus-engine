@@ -46,13 +46,29 @@
 
 #include "eng/ecs/World.h"
 
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace eng {
 class Scripts;
 }
 
 namespace eng::ecs {
+
+// A prefab as a file describes it (see Content): component bytes plus,
+// for patches, which fields the file actually set.
+struct PrefabDef {
+    struct Component {
+        ComponentId id = kNoComponent;
+        std::vector<std::byte> bytes;     // the component's defaults with the file's fields written in
+        std::vector<uint16_t> fieldsSet;  // indices into ComponentInfo::fields
+    };
+    uint16_t max = 0;      // 0: not given (the world's default, or unchanged by a patch)
+    bool patch = false;    // merge into an earlier pack's prefab instead of replacing it
+    std::vector<Component> components;  // sorted by id
+    std::vector<ComponentId> removed;   // Comp = false
+};
 
 class LuaEcs {
 public:
@@ -71,6 +87,13 @@ public:
     // stack (popped), each as its own Scripts::call. A failing handler is
     // logged and the rest still run; returns false if any failed.
     bool emit(std::string_view name, int nargs);
+
+    // Reads the prefab table on top of the stack (popped) into `out`:
+    //   { max = 8, patch = false, Health = { hp = 3 }, Pos = true, Frozen = false }
+    // (a component: a table of fields, true for its defaults, false to remove
+    // it). The registry must be finalized. On a bad table logs the error and
+    // returns false (Scripts::lastError() has it).
+    bool readPrefab(PrefabDef& out);
 
 private:
     friend struct LuaEcsAccess;

@@ -193,15 +193,55 @@ struct LuaEcsAccess {
         return *f;
     }
 
-    // { field = value, ... } at `tidx` into component bytes.
-    static void fillFromTable(lua_State* L, int tidx, const ComponentInfo& c, std::byte* bytes) {
+    // { field = value, ... } at `tidx` into component bytes; `set` collects the field indices written.
+    static void fillFromTable(lua_State* L, int tidx, const ComponentInfo& c, std::byte* bytes,
+                              std::vector<uint16_t>* set = nullptr) {
         tidx = lua_absindex(L, tidx);
         luaL_checktype(L, tidx, LUA_TTABLE);
         lua_pushnil(L);
         while (lua_next(L, tidx)) {
-            storeField(L, lua_gettop(L), c, checkField(L, c, -2), bytes);
+            const FieldInfo& f = checkField(L, c, -2);
+            storeField(L, lua_gettop(L), c, f, bytes);
+            if (set) set->push_back(uint16_t(&f - c.fields.data()));
             lua_pop(L, 1);
         }
+        if (set) std::sort(set->begin(), set->end());
+    }
+
+    // (table, PrefabDef*) → fills the def.
+    static int parsePrefab(lua_State* L) {
+        luaL_checktype(L, 1, LUA_TTABLE);
+        auto* out = static_cast<PrefabDef*>(lua_touserdata(L, 2));
+        const Registry& reg = registry(L);
+        if (!reg.finalized()) luaL_error(L, "prefabs are read after the registry is finalized");
+        lua_pushnil(L);
+        while (lua_next(L, 1)) {
+            if (lua_type(L, -2) != LUA_TSTRING) luaL_error(L, "prefab keys are component names (or max, patch), got a %s", luaL_typename(L, -2));
+            std::string key = lua_tostring(L, -2);
+            if (key == "max") {
+                lua_Integer m = lua_isinteger(L, -1) ? lua_tointeger(L, -1) : 0;
+                if (m < 1 || m > 0xFFFF) luaL_error(L, "max must be an integer from 1 to 65535");
+                out->max = uint16_t(m);
+            } else if (key == "patch") {
+                if (!lua_isboolean(L, -1)) luaL_error(L, "patch must be true or false");
+                out->patch = lua_toboolean(L, -1);
+            } else {
+                ComponentId c = reg.find(key);
+                if (c == kNoComponent) luaL_error(L, "no component named '%s'", key.c_str());
+                if (lua_isboolean(L, -1) && !lua_toboolean(L, -1)) {
+                    out->removed.push_back(c);
+                } else {
+                    PrefabDef::Component comp{c, reg.info(c).defaults, {}};
+                    if (lua_istable(L, -1)) fillFromTable(L, -1, reg.info(c), comp.bytes.data(), &comp.fieldsSet);
+                    else if (!lua_isboolean(L, -1)) luaL_error(L, "%s: expected a table of fields, true or false", key.c_str());
+                    out->components.push_back(std::move(comp));
+                }
+            }
+            lua_pop(L, 1);
+        }
+        std::sort(out->components.begin(), out->components.end(), [](auto& a, auto& b) { return a.id < b.id; });
+        std::sort(out->removed.begin(), out->removed.end());
+        return 0;
     }
 
     // ── Component refs ──
@@ -546,6 +586,17 @@ LuaEcs::~LuaEcs() {
     lua_pushnil(L);
     lua_rawsetp(L, LUA_REGISTRYINDEX, &kSelfKey);
     luaL_unref(L, LUA_REGISTRYINDEX, m_handlersRef);
+}
+
+bool LuaEcs::readPrefab(PrefabDef& out) {
+    lua_State* L = m_scripts.L();
+    out = {};
+    lua_pushcfunction(L, LuaEcsAccess::parsePrefab);
+    lua_insert(L, -2);
+    lua_pushlightuserdata(L, &out);
+    if (m_scripts.call(2, 0)) return true;
+    out = {};
+    return false;
 }
 
 bool LuaEcs::emit(std::string_view name, int nargs) {
