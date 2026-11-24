@@ -1,2 +1,6 @@
 build/
-deps/
+.devenv/
+.devenv.flake.nix
+.zig-cache/
+zig-out/
+zig-pkg/
