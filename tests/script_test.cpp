@@ -122,6 +122,19 @@ int main(int argc, char** argv) {
     CHECK(!ok);
     eval(s, mod, "while true do coroutine.resume(coroutine.create(function() while true do end end)) end", &ok);
     CHECK(!ok && s.lastError().find("instruction limit") != std::string::npos);
+    // Pattern matching runs in C, between VM instructions: it's charged to
+    // the budget too (third_party/lua/lstrlib.c), so backtracking can't hang.
+    eval(s, mod, "return string.rep('a', 20000):find('.-.-.-.-.-.-b')", &ok);
+    CHECK(!ok && s.lastError().find("instruction limit") != std::string::npos);
+    eval(s, mod, "return pcall(string.find, string.rep('a', 20000), '.-.-.-.-.-.-b')", &ok);  // pcall can't swallow it
+    CHECK(!ok && s.lastError().find("instruction limit") != std::string::npos);
+    eval(s, mod, "return string.rep('(', 30000):find('%b()')", &ok);  // %b rescans the rest from every start
+    CHECK(!ok && s.lastError().find("instruction limit") != std::string::npos);
+    CHECK(eval(s, mod, "local n = 0 for _ in string.rep('(', 1000):gmatch('%b()') do n = n + 1 end return n") == "0");
+    eval(s, mod, "return string.rep('a', 1 << 20):find(string.rep('a', 1 << 19) .. 'b', 1, true)", &ok);
+    CHECK(!ok && s.lastError().find("instruction limit") != std::string::npos);
+    CHECK(eval(s, mod, "return ('  key = value  '):match('^%s*(%w+)%s*=%s*(.-)%s*$')") == "key");  // ordinary use is fine
+    CHECK(eval(s, mod, "return select(2, string.rep('ab', 5000):gsub('a', 'x'))") == "5000");
     CHECK(eval(s, mod, "local n = 0 for i = 1, 1000 do n = n + i end return n") == "500500");  // budget resets
     eval(s, mod, "local t = {} for i = 1, 100 do t[i] = string.rep('x', 1 << 20) end", &ok);
     CHECK(!ok && s.lastError().find("memory") != std::string::npos);

@@ -23,6 +23,7 @@
 //   ecs.spawn([prefab])           entity, or nil at a cap
 //   ecs.destroy(e)  ecs.alive(e)  ecs.prefab(e) → name or nil
 //   ecs.add(e, comp [, init])     → component ref; init = { field = value, ... }
+//                                 (nil inside ecs.each: the add is deferred, so set fields via init)
 //   ecs.remove(e, comp)  ecs.has(e, comp)
 //   ecs.get(e, comp)              → component ref, or nil
 //   ecs.each(comp, ..., fn)       fn(e) for every entity with all of them
@@ -101,6 +102,7 @@ private:
     Registry& m_registry;
     World* m_world = nullptr;
     int m_handlersRef = 0;  // registry ref: event name → { {fn=, src=}, ... }
+    int m_reloadListener = 0;
 };
 
 }  // namespace eng::ecs

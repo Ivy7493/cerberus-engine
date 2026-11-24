@@ -84,7 +84,8 @@ public:
     // All three must outlive this.
     Content(Scripts& scripts, Registry& registry, LuaEcs& luaEcs);
 
-    // The base game's directory and version (for the manifest). First.
+    // The base game's directory and version (for the manifest; at most 64
+    // bytes, else std::invalid_argument). First.
     void setBase(std::filesystem::path root, std::string version);
 
     // Every <modsDir>/<folder> with a valid mod.lua, sorted by id. Bad or

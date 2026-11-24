@@ -6,6 +6,7 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // Lua 5.4 is compiled as C++ (errors are exceptions, so they unwind C++
@@ -94,9 +95,14 @@ public:
     // Called by reloadChanged() just before a changed module is re-run, with
     // its chunk name ("@ai/hound.lua", as debug info reports it): lets
     // bindings drop what that file registered (event handlers) so the re-run
-    // doesn't register it twice.
-    void addReloadListener(std::function<void(const std::string& chunkname)> fn) {
-        m_reloadListeners.push_back(std::move(fn));
+    // doesn't register it twice. Returns an id for removeReloadListener();
+    // a listener that captures an object must be removed when it dies.
+    int addReloadListener(std::function<void(const std::string& chunkname)> fn) {
+        m_reloadListeners.push_back({++m_lastListenerId, std::move(fn)});
+        return m_lastListenerId;
+    }
+    void removeReloadListener(int id) {
+        std::erase_if(m_reloadListeners, [id](const auto& l) { return l.first == id; });
     }
 
     size_t memoryUsed() const { return m_memUsed; }
@@ -147,7 +153,8 @@ private:
     std::vector<Env> m_envs;
     std::vector<Module> m_modules;
     std::string m_lastError;
-    std::vector<std::function<void(const std::string&)>> m_reloadListeners;
+    std::vector<std::pair<int, std::function<void(const std::string&)>>> m_reloadListeners;
+    int m_lastListenerId = 0;
 };
 
 }  // namespace eng

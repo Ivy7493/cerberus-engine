@@ -86,6 +86,13 @@ static void testEntities(const Registry& r) {
     CHECK(!w.alive(b) && w.alive(d));  // the old handle stays stale
     w.destroy(b);                      // stale: no-op
     CHECK(w.alive(d) && w.size() == 3);
+    bool addThrew = false;
+    try {
+        w.add<Health>(b);  // stale handle: a throw, not a null dereference
+    } catch (const std::logic_error&) {
+        addThrew = true;
+    }
+    CHECK(addThrew && !w.has<Health>(d));
     CHECK(!w.alive(kNullEntity) && w.entityAt(entitySlot(d)) == d);
 
     // Freed slots are reused first-in, first-out.

@@ -6,6 +6,7 @@
 #include <lua/lua.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <fstream>
 #include <map>
@@ -129,6 +130,9 @@ void Content::error(const std::string& message) {
 
 void Content::setBase(fs::path root, std::string version) {
     if (!m_packs.empty()) throw std::logic_error("Content: setBase twice");
+    // ContentManifest::read caps versions at 64 bytes: a longer one would make
+    // every peer's copy of the host's manifest look malformed.
+    if (version.size() > 64) throw std::invalid_argument("Content: base version is longer than 64 bytes");
     Pack base{"base", std::move(version), root, ScriptTrust::Base};
     base.env = m_scripts.addEnv("base", root, ScriptTrust::Base);
     base.hash = hashDirectory(root);
@@ -311,6 +315,15 @@ void Content::loadPrefabs(World& world) {
 
         for (const auto& name : names) {
             std::string where = pack.id + ": prefabs/" + name;
+            // require() reads dots as directories (boss.v2 → boss/v2), which
+            // would load a different file (or base's, from a mod).
+            bool plain = std::all_of(name.begin(), name.end(), [](char ch) {
+                return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_' || ch == '-' || ch == '/';
+            });
+            if (!plain) {
+                error(where + ": prefab file names may only use letters, digits, '_', '-' (no dots)");
+                continue;
+            }
             if (!m_scripts.require(pack.env, "prefabs/" + name)) {
                 error(where + ": " + m_scripts.lastError());
                 continue;

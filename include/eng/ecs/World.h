@@ -120,7 +120,12 @@ public:
 
     // ── Components, typed ──
     template <class T> ComponentId id() const;
-    template <class T> T& add(Entity e, const T& value = T{}) { return *static_cast<T*>(add(e, id<T>(), &value)); }
+    // Throws std::logic_error if `e` isn't alive (the untyped add returns nullptr).
+    template <class T> T& add(Entity e, const T& value = T{}) {
+        void* p = add(e, id<T>(), &value);
+        if (!p) throw std::logic_error("World::add: entity isn't alive");
+        return *static_cast<T*>(p);
+    }
     template <class T> void remove(Entity e) { remove(e, id<T>()); }
     template <class T> bool has(Entity e) const { return has(e, id<T>()); }
     template <class T> T* get(Entity e) { return static_cast<T*>(get(e, id<T>())); }

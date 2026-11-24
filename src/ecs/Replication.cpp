@@ -281,10 +281,14 @@ void SnapshotServer::capture(const World& world, uint32_t tick) {
 std::vector<std::vector<uint8_t>> SnapshotServer::encode(uint32_t ackedTick) const {
     if (m_history.empty()) return {};
     const Snapshot& cur = *m_history.back();
+    // The client already has the newest tick (we're sending faster than we
+    // capture): nothing to send. A delta against itself would carry
+    // baseTick == tick, which receive() rightly rejects as malformed.
+    if (ackedTick == cur.tick) return {};
     const Snapshot* base = nullptr;
     if (ackedTick)
         for (const auto& s : m_history)
-            if (s->tick == ackedTick) base = s.get();
+            if (s->tick == ackedTick && s->tick < cur.tick) base = s.get();
 
     std::vector<uint16_t> removed;
     if (base)

@@ -195,6 +195,9 @@ int main() {
         auto empty = ss.encode(610);
         CHECK(empty.size() == 1 && empty[0].size() == 14);
         CHECK(sc.receive(empty[0].data(), empty[0].size()) && sc.ackTick() == 611);
+        // Sending again before the next capture: the client has tick 611, so
+        // there's nothing to send (not a base == tick delta it would reject).
+        CHECK(ss.encode(611).empty());
     }
 
     // ── A big full snapshot splits; every part is needed ──

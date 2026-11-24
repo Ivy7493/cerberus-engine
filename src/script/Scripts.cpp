@@ -22,6 +22,36 @@ constexpr int kHookEvery = 1000;  // VM instructions between budget checks
 // loaded[name] while the module's chunk runs: a second require is a cycle.
 char kLoadingSentinel;
 
+// Registry key: a weak-keyed set of the views makeReadOnly made. rawset
+// skips __newindex, so the sandbox's rawset checks this set itself.
+char kReadOnlyViews;
+
+void pushReadOnlyViews(lua_State* L) {
+    if (lua_rawgetp(L, LUA_REGISTRYINDEX, &kReadOnlyViews) == LUA_TTABLE) return;
+    lua_pop(L, 1);
+    lua_newtable(L);
+    lua_newtable(L);
+    lua_pushliteral(L, "k");
+    lua_setfield(L, -2, "__mode");
+    lua_setmetatable(L, -2);
+    lua_pushvalue(L, -1);
+    lua_rawsetp(L, LUA_REGISTRYINDEX, &kReadOnlyViews);
+}
+
+// rawset(t, k, v), refusing the read-only API views.
+int luaRawset(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    pushReadOnlyViews(L);
+    lua_pushvalue(L, 1);
+    bool readOnly = lua_rawget(L, -2) != LUA_TNIL;
+    lua_pop(L, 2);
+    if (readOnly) return luaL_error(L, "attempt to modify a read-only table");
+    lua_pushvalue(L, lua_upvalueindex(1));
+    lua_insert(L, 1);
+    lua_call(L, lua_gettop(L) - 1, 1);
+    return 1;
+}
+
 bool readFile(const fs::path& path, std::string& out) {
     std::ifstream in(path, std::ios::binary);
     if (!in) return false;
@@ -173,6 +203,11 @@ void Scripts::makeReadOnly(lua_State* L) {
     lua_pushboolean(L, 0);
     lua_setfield(L, -2, "__metatable");
     lua_setmetatable(L, -2);
+    pushReadOnlyViews(L);
+    lua_pushvalue(L, -2);
+    lua_pushboolean(L, 1);
+    lua_rawset(L, -3);
+    lua_pop(L, 1);
     lua_replace(L, real);
 }
 
@@ -203,10 +238,13 @@ void Scripts::buildEnvTable(ScriptEnv id) {
     int g = lua_gettop(L);
 
     for (const char* name : {"assert", "error", "ipairs", "next", "pairs", "select", "tonumber", "tostring", "type",
-                             "rawequal", "rawget", "rawset", "rawlen", "getmetatable", "_VERSION"}) {
+                             "rawequal", "rawget", "rawlen", "getmetatable", "_VERSION"}) {
         lua_getfield(L, g, name);
         lua_setfield(L, env, name);
     }
+    lua_getfield(L, g, "rawset");
+    lua_pushcclosure(L, &luaRawset, 1);
+    lua_setfield(L, env, "rawset");
     lua_pushcfunction(L, &Scripts::luaPcall);
     lua_setfield(L, env, "pcall");
     lua_pushcfunction(L, &Scripts::luaXpcall);
@@ -491,8 +529,11 @@ int Scripts::reloadChanged() {
         std::string data;
         if (!readFile(path, data)) continue;
         bool binary = path.extension() == ".luac";
-        std::string chunkname = "@" + (env.trust == ScriptTrust::Base ? fs::relative(path, env.root).generic_string()
-                                                                       : env.name + "/" + fs::relative(path, env.root).generic_string());
+        // Bytecode carries eng-luac's chunk name ("@ai/hound.lua", not .luac):
+        // listeners match handlers by the name their functions report.
+        fs::path rel = fs::relative(path, env.root);
+        if (binary) rel.replace_extension(".lua");
+        std::string chunkname = "@" + (env.trust == ScriptTrust::Base ? rel.generic_string() : env.name + "/" + rel.generic_string());
         if (luaL_loadbufferx(L, data.data(), data.size(), chunkname.c_str(), binary ? "b" : "t") != LUA_OK) {
             m_lastError = lua_tostring(L, -1);
             ENG_LOG("[script] reload failed: " << m_lastError);
@@ -501,7 +542,7 @@ int Scripts::reloadChanged() {
         }
         lua_rawgeti(L, LUA_REGISTRYINDEX, env.tableRef);
         if (!lua_setupvalue(L, -2, 1)) lua_pop(L, 1);
-        for (auto& listener : m_reloadListeners) listener(chunkname);
+        for (auto& listener : m_reloadListeners) listener.second(chunkname);
         lua_pushstring(L, name.c_str());
         if (!call(1, 1)) continue;
         if (lua_isnil(L, -1)) {

@@ -50,13 +50,14 @@ const eng_sources = [_][]const u8{
 
 /// Lua 5.4's core and the libraries eng::Scripts exposes. Not io, os, debug
 /// or package (loadlib), nor linit.c (Scripts opens what it wants), nor the
-/// lua/luac front ends.
+/// lua/luac front ends. lstrlib.c is third_party/lua's patched copy (pattern
+/// matching charged to the instruction budget), not the tarball's.
 const lua_sources = [_][]const u8{
     "lapi.c",    "lcode.c",   "lctype.c",  "ldebug.c",   "ldo.c",     "ldump.c",
     "lfunc.c",   "lgc.c",     "llex.c",    "lmem.c",     "lobject.c", "lopcodes.c",
     "lparser.c", "lstate.c",  "lstring.c", "ltable.c",   "ltm.c",     "lundump.c",
     "lvm.c",     "lzio.c",    "lauxlib.c", "lbaselib.c", "lcorolib.c", "lmathlib.c",
-    "lstrlib.c", "ltablib.c", "lutf8lib.c",
+    "ltablib.c", "lutf8lib.c",
 };
 const lua_public_headers = [_][]const u8{ "lua.h", "luaconf.h", "lauxlib.h", "lualib.h" };
 
@@ -306,6 +307,8 @@ fn luaHeaders(b: *std.Build, lua: *std.Build.Dependency) *std.Build.Step.WriteFi
 
 fn addLua(m: *std.Build.Module, lua: *std.Build.Dependency, headers: *std.Build.Step.WriteFile) void {
     m.addCSourceFiles(.{ .root = lua.path("src"), .files = &lua_sources, .flags = &lua_flags, .language = .cpp });
+    m.addCSourceFile(.{ .file = m.owner.path("third_party/lua/lstrlib.c"), .flags = &lua_flags, .language = .cpp });
+    m.addIncludePath(lua.path("src"));  // the patched lstrlib.c's "lua.h", "lprefix.h"
     m.addIncludePath(headers.getDirectory());
 }
 
@@ -451,6 +454,18 @@ pub fn link(b: *std.Build, exe: *std.Build.Step.Compile, eng_dep: *std.Build.Dep
         if (target.query.glibc_version != null) exe.linker_allow_shlib_undefined = true;
     }
     if (eng_dep.builder.named_lazy_paths.get("steam_api_link")) |lp| m.addObjectFile(lp);
+}
+
+/// link() for headless executables (tests, simulations) that use only eng's
+/// non-graphics parts (ECS, scripting, ByteStream): the library, its headers
+/// and public macros, but no Vulkan loader or Steam runtime. A static archive
+/// only contributes the objects the executable references, so nothing that
+/// needs those gets pulled in.
+pub fn linkHeadless(b: *std.Build, exe: *std.Build.Step.Compile, eng_dep: *std.Build.Dependency) void {
+    _ = b;
+    const m = exe.root_module;
+    m.linkLibrary(eng_dep.artifact("eng"));
+    addPublicMacros(m, m.resolved_target.?.result.os.tag == .windows);
 }
 
 /// The build machine's Vulkan loader, linked only for its soname

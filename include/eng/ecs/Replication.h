@@ -69,7 +69,8 @@ public:
     uint32_t latestTick() const;
 
     // The newest snapshot's packets for a client whose newest acknowledged
-    // tick is `ackedTick` (0: none — a full snapshot). Empty before any capture.
+    // tick is `ackedTick` (0: none — a full snapshot). Empty before any capture,
+    // and when the client already acknowledged the newest tick.
     std::vector<std::vector<uint8_t>> encode(uint32_t ackedTick) const;
 
 private:

@@ -87,7 +87,7 @@ struct LuaEcsAccess {
     static std::byte* resolve(lua_State* L, const Ref& ref) {
         void* p = world(L).get(ref.entity, ref.component);
         if (!p)
-            luaL_error(L, "entity %d has no %s (destroyed, or the component was removed)", int(ref.entity),
+            luaL_error(L, "entity %I has no %s (destroyed, or the component was removed)", lua_Integer(ref.entity),
                        registry(L).info(ref.component).name.c_str());
         return static_cast<std::byte*>(p);
     }
@@ -96,7 +96,7 @@ struct LuaEcsAccess {
     static void storeInt(lua_State* L, int idx, std::byte* at, const ComponentInfo& c, const FieldInfo& f) {
         lua_Integer v = luaL_checkinteger(L, idx);
         if (v < lua_Integer(std::numeric_limits<T>::min()) || v > lua_Integer(std::numeric_limits<T>::max()))
-            luaL_error(L, "%s.%s: %d is out of range for %s", c.name.c_str(), f.name.c_str(), int(v), fieldTypeName(f.type));
+            luaL_error(L, "%s.%s: %I is out of range for %s", c.name.c_str(), f.name.c_str(), v, fieldTypeName(f.type));
         T t = static_cast<T>(v);
         std::memcpy(at, &t, sizeof(T));
     }
@@ -261,7 +261,7 @@ struct LuaEcsAccess {
     }
     static int componentTostring(lua_State* L) {
         auto* ref = static_cast<Ref*>(luaL_checkudata(L, 1, kComponentMeta));
-        lua_pushfstring(L, "%s@%d", registry(L).info(ref->component).name.c_str(), int(ref->entity));
+        lua_pushfstring(L, "%s@%I", registry(L).info(ref->component).name.c_str(), lua_Integer(ref->entity));
         return 1;
     }
     static int vecAxis(lua_State* L, int keyIdx) {
@@ -413,11 +413,18 @@ struct LuaEcsAccess {
             Entity e = checkEntity(L, 1);
             ComponentId c = checkComponent(L, 2);
             const ComponentInfo& info = registry(L).info(c);
-            if (!w.alive(e)) luaL_error(L, "ecs.add(%s): entity %d isn't alive", info.name.c_str(), int(e));
+            if (!w.alive(e)) luaL_error(L, "ecs.add(%s): entity %I isn't alive", info.name.c_str(), lua_Integer(e));
             std::vector<std::byte> bytes = info.defaults;
             if (!lua_isnoneornil(L, 3)) fillFromTable(L, 3, info, bytes.data());
-            if (w.iterating()) w.commands().add(e, c, bytes.data());
-            else w.add(e, c, bytes.data());
+            if (w.iterating()) {
+                // Deferred until the game flushes: there's nothing to refer to
+                // yet (and an existing component would be overwritten by the
+                // queued bytes), so no ref — put the values in `init`.
+                w.commands().add(e, c, bytes.data());
+                lua_pushnil(L);
+                return 1;
+            }
+            w.add(e, c, bytes.data());
             pushRef(L, {e, c, 0}, kComponentMeta);
             return 1;
         });
@@ -576,12 +583,13 @@ LuaEcs::LuaEcs(Scripts& scripts, Registry& registry) : m_scripts(scripts), m_reg
     Scripts::makeReadOnly(L);
     scripts.exposeGlobal("events");
 
-    scripts.addReloadListener([this](const std::string& chunkname) {
+    m_reloadListener = scripts.addReloadListener([this](const std::string& chunkname) {
         LuaEcsAccess::dropHandlersFrom(*this, m_scripts.L(), chunkname);
     });
 }
 
 LuaEcs::~LuaEcs() {
+    m_scripts.removeReloadListener(m_reloadListener);
     lua_State* L = m_scripts.L();
     lua_pushnil(L);
     lua_rawsetp(L, LUA_REGISTRYINDEX, &kSelfKey);

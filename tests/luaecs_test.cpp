@@ -162,6 +162,14 @@ int main() {
 
     // ── Errors and limits inside callbacks leave the world usable ──
     CHECK(eval(s, base, "d = ecs.spawn('hound') return d ~= nil") == "true");
+    // ecs.add inside ecs.each is deferred: no ref (it'd point at nothing, or
+    // at values the queued add then overwrites); init's values land at flush.
+    CHECK(eval(s, base, "deferred = ecs.spawn() local r = 'x' ecs.each('Health', function(e) "
+                        "if r == 'x' then r = ecs.add(deferred, 'Health', {hp = 7}) end end) "
+                        "return tostring(r) .. tostring(ecs.has(deferred, 'Health'))") == "nilfalse");
+    world.flush();
+    CHECK(eval(s, base, "return ecs.get(deferred, 'Health').hp") == "7");
+    CHECK(eval(s, base, "ecs.destroy(deferred)") == "");
     CHECK(fails(s, base, "ecs.each('Health', function(e) error('in callback') end)", "in callback"));
     CHECK(!world.iterating());
     CHECK(fails(s, mod, "ecs.each('Health', function(e) while true do end end)", "instruction limit"));
@@ -171,6 +179,8 @@ int main() {
     // ── The API tables are read-only for everyone ──
     CHECK(fails(s, mod, "ecs.spawn = function() end", "read-only"));
     CHECK(fails(s, mod, "events.on = nil", "read-only"));
+    CHECK(fails(s, mod, "rawset(ecs, \"spawn\", function() end)", "read-only"));
+    CHECK(fails(s, mod, "rawset(events, \"on\", nil)", "read-only"));
     CHECK(eval(s, mod, "return getmetatable(ecs)") == "false");
     CHECK(eval(s, base, "return type(ecs.spawn)") == "function");
     CHECK(eval(s, mod, "return getmetatable(ecs.get(spawned and 0 or 0, 'Pos') or {})") == "");

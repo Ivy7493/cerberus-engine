@@ -82,6 +82,7 @@ int main() {
     write(mods / "cool" / "components.lua", "ecs.component('Shiny', { glow = 'f32' })");
     write(mods / "cool" / "prefabs" / "hound.lua", "return { patch = true, Health = { hp = 9 }, Frozen = { stacks = 2 } }");
     write(mods / "cool" / "prefabs" / "wolf.lua", "return { Health = true, Shiny = { glow = 1.5 } }");
+    write(mods / "cool" / "prefabs" / "boss.v2.lua", "return { Health = true }");
     write(mods / "cool" / "prefabs" / "ghost.lua", "return { patch = true, Health = { hp = 1 } }");
     write(mods / "replacer" / "mod.lua", "return { id = 'replacer', version = '2', requires = {'coolmod'} }");
     write(mods / "replacer" / "prefabs" / "enemies" / "bat.lua", "return { Pos = { p = {5, 5} } }");
@@ -105,6 +106,14 @@ int main() {
 
     Content content(scripts, reg, luaEcs);
     content.setBase(base, "1.0.3");
+    bool longThrew = false;
+    try {
+        Content other(scripts, reg, luaEcs);
+        other.setBase(base, std::string(65, 'v'));  // ContentManifest::read would reject it
+    } catch (const std::invalid_argument&) {
+        longThrew = true;
+    }
+    CHECK(longThrew);
 
     // ── Discovery ──
     std::vector<ModInfo> available = content.discover(mods);
@@ -147,6 +156,8 @@ int main() {
     CHECK(hasError(content, "coolmod: prefabs/ghost: patches a prefab no earlier pack defines"));
     CHECK(world.findPrefab("broken") == kNoPrefab && world.findPrefab("ghost") == kNoPrefab);
     CHECK(world.findPrefab("imp") == kNoPrefab);  // its pack failed
+    // A dotted file name would require() boss/v2 (or base's file of that name).
+    CHECK(hasError(content, "coolmod: prefabs/boss.v2: prefab file names") && world.findPrefab("boss.v2") == kNoPrefab);
     PrefabId bat = world.findPrefab("enemies/bat"), hound = world.findPrefab("hound"), wolf = world.findPrefab("wolf");
     CHECK(bat == 0 && hound == 1 && wolf == 2);  // sorted by name
 
