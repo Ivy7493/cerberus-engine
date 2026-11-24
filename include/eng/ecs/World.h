@@ -91,11 +91,18 @@ public:
     template <class T> void setPrefabComponent(PrefabId p, const T& value) { setPrefabComponent(p, id<T>(), &value); }
     const std::string& prefabName(PrefabId p) const { return m_prefabs[p].name; }
     uint16_t prefabCount(PrefabId p) const { return m_prefabs[p].live; }
+    size_t prefabDefinitions() const { return m_prefabs.size(); }  // valid PrefabIds are below this
 
     // ── Entities ──
     // kNullEntity when the world or the prefab is at its cap (logged).
     Entity spawn(PrefabId prefab = kNoPrefab);
     void destroy(Entity e);  // no-op for a stale handle
+    // Spawns exactly `e` (its slot, with its generation) — for a client
+    // mirroring the server's entities, so handles (and Entity fields) mean the
+    // same thing on both. The slot must be free. Caps aren't checked: the
+    // server already applied them. A mirrored world shouldn't also spawn()
+    // entities of its own, or they'd take slots the server will use.
+    Entity spawnAt(Entity e, PrefabId prefab = kNoPrefab);
     bool alive(Entity e) const;
     PrefabId prefabOf(Entity e) const;  // kNoPrefab if none / not alive
     // The live entity in `slot`, or kNullEntity — for net code, which sends slots.

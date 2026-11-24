@@ -97,6 +97,28 @@ Entity World::spawn(PrefabId prefab) {
     return e;
 }
 
+Entity World::spawnAt(Entity e, PrefabId prefab) {
+    checkStructural("spawnAt");
+    uint16_t slot = entitySlot(e), gen = entityGeneration(e);
+    if (slot >= m_cap || gen == 0) throw std::invalid_argument("World: spawnAt with an entity outside this world");
+    if (m_alive[slot]) throw std::logic_error("World: spawnAt a slot that's in use");
+    if (prefab != kNoPrefab && prefab >= m_prefabs.size()) throw std::invalid_argument("World: spawnAt with an unknown prefab");
+    // Take the slot out of the free ring (keeping the others' order).
+    for (uint32_t i = 0; i < m_freeCount; ++i) {
+        if (m_free[(m_freeHead + i) % m_cap] != slot) continue;
+        for (uint32_t j = i; j + 1 < m_freeCount; ++j) m_free[(m_freeHead + j) % m_cap] = m_free[(m_freeHead + j + 1) % m_cap];
+        --m_freeCount;
+        break;
+    }
+    m_generation[slot] = gen;
+    m_alive[slot] = 1;
+    m_prefabOf[slot] = prefab;
+    ++m_live;
+    if (prefab != kNoPrefab) ++m_prefabs[prefab].live;
+    applyPrefab(e, prefab);
+    return e;
+}
+
 void World::destroy(Entity e) {
     checkStructural("destroy");
     if (!alive(e)) return;

@@ -1,8 +1,8 @@
 # ECS + Lua plan
 
-Status: phases 1–4 done (ECS core, Lua bridge and content/mod loading in `eng/ecs/`, tested by
-`tests/ecs_test.cpp`, `tests/luaecs_test.cpp` and `tests/content_test.cpp`); phase 5, net, next (branch
-`ecs-lua`).
+Status: phases 1–5 done (ECS core, Lua bridge, content/mod loading and replication in `eng/ecs/`, tested
+by `tests/ecs_test.cpp`, `tests/luaecs_test.cpp`, `tests/content_test.cpp` and
+`tests/replication_test.cpp`); phase 6, the delve pilot, next (branch `ecs-lua`).
 
 ## Decisions
 
@@ -94,7 +94,10 @@ return {
   - per changed entity: slot (varint), prefab id on spawn, changed-component mask, per component a changed-field
     mask + values (`u8`/varint/int16 fixed-point via `ByteWriter`)
 - Keep packets ≲1200 bytes: `UdpTransport` relies on IP fragmentation for large messages (fine on
-  loopback only). Full snapshots split by entity range; each piece applies independently.
+  loopback only). Snapshots split into parts by whole entity records. *As built:* the client needs every
+  part of a tick before using any (a lost part loses that snapshot; the next delta is still against the
+  last acked one, so nothing desyncs), rather than applying parts independently: interpolation needs
+  whole snapshots anyway, and removals must apply before respawns at the same slot.
 - Client: remote entities interpolated from snapshot buffers; local player stays C++-predicted.
 
 ## Phases
@@ -111,6 +114,8 @@ return {
    `diff()` for the join handshake. Not yet: hot-reloading prefabs into a live world, disabling a mod
    whose handlers fault at runtime.) prefab loading/validation, mod discovery and load order, overrides, manifest and
    hashes.
-5. **Net:** snapshot ring, delta encoding, split packets, client interpolation, schema/mod handshake;
+5. **Net:** (`ecs::SnapshotServer` / `SnapshotClient`, transport-agnostic; the mirror world uses
+   `World::spawnAt` so handles match; the handshake itself is the game's message carrying
+   `ContentManifest`.) snapshot ring, delta encoding, split packets, client interpolation, schema/mod handshake;
    tested under `LagTransport`.
 6. **Delve pilot:** one enemy type end to end, `delve_simtest` green.
