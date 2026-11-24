@@ -109,6 +109,7 @@ struct PanelOptions {
     glm::vec4 dimColor{0.0f, 0.0f, 0.02f, 0.6f};
     Clay_CustomElementConfig background{};  // drawn behind the contents (e.g. a themed frame)
     bool scroll = false;        // contents scroll when taller than maxHeight
+    glm::vec4 color{-1.0f};     // background (no `background`); r < 0 = the theme's panel colour
 };
 
 class Context {

@@ -1,5 +1,7 @@
 #include "eng/render/Renderer2D.h"
 
+#include <chrono>
+
 #include "eng/core/Log.h"
 #include "eng/platform/Window.h"
 #include "eng/render/Swapchain.h"
@@ -578,7 +580,7 @@ glm::vec2 Renderer2D::screenToWorld(const glm::vec2& screen) const {
 // ── Drawing ──────────────────────────────────────────────────────────────────
 
 void Renderer2D::draw(const Sprite& s) {
-    if (m_vertices.size() + 4 > kMaxSprites * 4) return;  // silently cap; never overrun the mapped buffer
+    if (!quadFits()) return;  // cap (counted in FrameStats); never overrun the mapped buffer
 
     glm::vec2 h = s.size * 0.5f;
     glm::vec2 corners[4] = {{-h.x, -h.y}, {h.x, -h.y}, {h.x, h.y}, {-h.x, h.y}};
@@ -614,21 +616,21 @@ void Renderer2D::pushVertices(const Vertex* v, TextureId texture, BlendMode blen
 }
 
 void Renderer2D::pushQuad(const glm::vec2 (&p)[4], const glm::vec4& color, Space space) {
-    if (m_vertices.size() + 4 > kMaxSprites * 4) return;
+    if (!quadFits()) return;
     glm::vec2 uv(0.5f);
     Vertex v[4] = {{p[0], uv, color}, {p[1], uv, color}, {p[2], uv, color}, {p[3], uv, color}};
     pushVertices(v, kWhite, BlendMode::Alpha, space);
 }
 
 void Renderer2D::drawTriangleColors(const glm::vec2 (&p)[3], const glm::vec4 (&c)[3], Space space) {
-    if (m_vertices.size() + 4 > kMaxSprites * 4) return;
+    if (!quadFits()) return;
     glm::vec2 uv(0.5f);
     Vertex v[4] = {{p[0], uv, c[0]}, {p[1], uv, c[1]}, {p[2], uv, c[2]}, {p[2], uv, c[2]}};  // degenerate 2nd triangle
     pushVertices(v, kWhite, BlendMode::Alpha, space);
 }
 
 void Renderer2D::drawQuadColors(const glm::vec2 (&p)[4], const glm::vec4 (&c)[4], Space space) {
-    if (m_vertices.size() + 4 > kMaxSprites * 4) return;
+    if (!quadFits()) return;
     glm::vec2 uv(0.5f);
     Vertex v[4] = {{p[0], uv, c[0]}, {p[1], uv, c[1]}, {p[2], uv, c[2]}, {p[3], uv, c[3]}};
     pushVertices(v, kWhite, BlendMode::Alpha, space);
@@ -661,7 +663,7 @@ void Renderer2D::popClip() {
 
 void Renderer2D::drawTriangle(const glm::vec2 (&p)[3], const glm::vec2 (&uv)[3], const glm::vec4& color,
                               TextureId texture, Space space, BlendMode blend) {
-    if (m_vertices.size() + 4 > kMaxSprites * 4) return;
+    if (!quadFits()) return;
     // A quad whose second triangle (c, c, a) is degenerate.
     Vertex v[4] = {{p[0], uv[0], color}, {p[1], uv[1], color}, {p[2], uv[2], color}, {p[2], uv[2], color}};
     pushVertices(v, texture, blend, space);
@@ -755,6 +757,7 @@ bool Renderer2D::beginFrame() {
 
     FrameResources& f = m_frames[m_frameIndex];
     VkDevice dev = m_context->device();
+    auto waitStart = std::chrono::steady_clock::now();
     vkWaitForFences(dev, 1, &f.inFlight, VK_TRUE, UINT64_MAX);
 
     VkResult r = vkAcquireNextImageKHR(dev, m_swapchain->handle(), UINT64_MAX, f.imageAvailable,
@@ -765,6 +768,8 @@ bool Renderer2D::beginFrame() {
     }
     if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) throw std::runtime_error("failed to acquire swapchain image");
     vkResetFences(dev, 1, &f.inFlight);
+    m_waitMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - waitStart).count();
+    m_droppedQuads = 0;
 
     m_vertices.clear();
     m_batches.clear();
@@ -780,6 +785,14 @@ bool Renderer2D::beginFrame() {
 void Renderer2D::endFrame() {
     if (!m_frameActive) return;
     m_frameActive = false;
+    auto submitStart = std::chrono::steady_clock::now();
+    m_lastStats.quads = static_cast<uint32_t>(m_vertices.size() / 4);
+    m_lastStats.batches = static_cast<uint32_t>(m_batches.size());
+    m_lastStats.lightBatches = m_lightsUsed ? static_cast<uint32_t>(m_lightBatches.size()) : 0;
+    m_lastStats.droppedQuads = m_droppedQuads;
+    m_lastStats.quadCapacity = kMaxSprites;
+    m_lastStats.waitMs = m_waitMs;
+    ++m_lastStats.frame;
 
     FrameResources& f = m_frames[m_frameIndex];
     std::memcpy(f.vertexMapped, m_vertices.data(), m_vertices.size() * sizeof(Vertex));
@@ -863,6 +876,7 @@ void Renderer2D::endFrame() {
     else if (r != VK_SUCCESS) throw std::runtime_error("failed to present");
 
     m_frameIndex = (m_frameIndex + 1) % kFramesInFlight;
+    m_lastStats.submitMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - submitStart).count();
 }
 
 void Renderer2D::recordBatches(VkCommandBuffer cmd, const std::vector<Batch>& batches, bool lightPass) {
