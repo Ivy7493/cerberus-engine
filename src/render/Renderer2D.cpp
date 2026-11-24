@@ -23,7 +23,7 @@ namespace eng {
 
 namespace {
 
-// SPIR-V compiled at build time (glslc -mfmt=c, see engine CMakeLists.txt).
+// SPIR-V compiled at build time (glslc -mfmt=c, see build.zig).
 const uint32_t kSpriteVertSpv[] =
 #include "sprite.vert.inc"
     ;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "eng/config.h" // ENG_HAVE_STEAM, as libeng.a was built
+
 #include "eng/net/Transport.h"
 
 #include <functional>

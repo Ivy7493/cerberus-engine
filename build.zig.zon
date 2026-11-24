@@ -1,0 +1,24 @@
+.{
+    .name = .eng,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.17.1",
+    .fingerprint = 0x99f5620b1d301f07,
+    .dependencies = .{
+        .imgui = .{
+            .url = "https://github.com/ocornut/imgui/archive/refs/tags/v1.91.0.tar.gz",
+            .hash = "N-V-__8AAEWdYwDAUbGLCAF0CyHlqjuyfVtaozhhIxNZTK2Q",
+        },
+        .glfw = .{
+            .url = "https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.zip",
+            .hash = "N-V-__8AAGILeQBiX6fOeXM8aImETLAuofbkuBtGo_q6zsGB",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "include",
+        "src",
+        "shaders",
+        "third_party",
+    },
+}
