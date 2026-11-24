@@ -34,6 +34,14 @@ public:
 
     void recreate();
 
+    // VSync on: FIFO (capped at the display's refresh, no tearing; always
+    // available). Off: MAILBOX (uncapped, no tearing) if the driver has it,
+    // else IMMEDIATE (uncapped, may tear), else FIFO. Takes effect at the
+    // next recreate(). Off by default.
+    void setVsync(bool on) { m_vsync = on; }
+    bool vsync() const { return m_vsync; }
+    VkPresentModeKHR presentMode() const { return m_presentMode; }  // what the swapchain actually uses
+
     VkSwapchainKHR handle() const { return m_swapchain; }
     VkFormat imageFormat() const { return m_imageFormat; }
     VkExtent2D extent() const { return m_extent; }
@@ -58,6 +66,8 @@ private:
     GLFWwindow* m_window;
     VkSampleCountFlagBits m_msaaSamples;
     bool m_srgb;
+    bool m_vsync = false;
+    VkPresentModeKHR m_presentMode = VK_PRESENT_MODE_FIFO_KHR;
     bool m_depth;
 
     VkSwapchainKHR m_swapchain = VK_NULL_HANDLE;

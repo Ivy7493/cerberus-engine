@@ -362,6 +362,7 @@ void Overlay::draw(ui::Context& ui) {
     // ── Renderer ──
     const Renderer2D::FrameStats& rs = m_renderer.lastFrameStats();
     heading("Renderer");
+    row(CLAY_ID("eng_dev_present"), "present mode", m_renderer.presentModeName());
     row(CLAY_ID("eng_dev_quads"), "quads", sv(ui.fmt("%u / %u", rs.quads, rs.quadCapacity)));
     row(CLAY_ID("eng_dev_batches"), "draw calls", sv(ui.fmt("%u  (+%u lightmap)", rs.batches, rs.lightBatches)));
     if (rs.droppedQuads) row(CLAY_ID("eng_dev_dropped"), "dropped quads", sv(ui.fmt("%u: over capacity", rs.droppedQuads)), kWarnColor);
