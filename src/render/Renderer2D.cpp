@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <span>
 #include <stdexcept>
 
 namespace eng {
@@ -651,7 +652,8 @@ void Renderer2D::pushVertices(const Vertex* v, TextureId texture, BlendMode blen
     // Clips are a screen/UI thing; the lightmap pass ignores them.
     uint32_t clip = m_inLights || m_clipStack.empty() ? 0 : m_clipStack.back();
     std::vector<Batch>& batches = m_inLights ? m_lightBatches : m_batches;
-    if (!batches.empty()) {
+    bool atSplit = !m_inLights && m_batches.size() == m_aboveImGui;  // first batch above ImGui starts fresh
+    if (!batches.empty() && !atSplit) {
         Batch& last = batches.back();
         if (last.texture == tex && last.blend == blend && last.space == space && last.clip == clip &&
             last.firstIndex + last.indexCount == firstIndex) {
@@ -688,6 +690,10 @@ void Renderer2D::pushClip(const Rect& r) {
     rect.extent = {uint32_t(std::max(0.0f, x1 - x0)), uint32_t(std::max(0.0f, y1 - y0))};
     m_clips.push_back(rect);
     m_clipStack.push_back(uint32_t(m_clips.size() - 1));
+}
+
+void Renderer2D::beginAboveImGui() {
+    if (m_aboveImGui == SIZE_MAX) m_aboveImGui = m_batches.size();
 }
 
 void Renderer2D::popClip() {
@@ -807,6 +813,7 @@ bool Renderer2D::beginFrame() {
     m_lightBatches.clear();
     m_clips.resize(1);
     m_clipStack.clear();
+    m_aboveImGui = SIZE_MAX;
     m_inLights = false;
     m_lightsUsed = false;
 
@@ -849,7 +856,7 @@ void Renderer2D::endFrame() {
         VkRect2D lscissor{{0, 0}, m_lightExtent};
         vkCmdSetViewport(cmd, 0, 1, &lvp);
         vkCmdSetScissor(cmd, 0, 1, &lscissor);
-        recordBatches(cmd, m_lightBatches, /*lightPass=*/true);
+        recordBatches(cmd, m_lightBatches.data(), m_lightBatches.size(), /*lightPass=*/true);
         vkCmdEndRenderPass(cmd);
     }
 
@@ -870,9 +877,17 @@ void Renderer2D::endFrame() {
     vkCmdSetViewport(cmd, 0, 1, &vp);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    recordBatches(cmd, m_batches, /*lightPass=*/false);
+    size_t split = std::min(m_aboveImGui, m_batches.size());
+    recordBatches(cmd, m_batches.data(), split, /*lightPass=*/false);
 
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
+
+    if (split < m_batches.size()) {
+        // ImGui left its own pipeline, buffers, scissor and viewport bound.
+        vkCmdSetViewport(cmd, 0, 1, &vp);
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+        recordBatches(cmd, m_batches.data() + split, m_batches.size() - split, /*lightPass=*/false);
+    }
 
     vkCmdEndRenderPass(cmd);
     vkEndCommandBuffer(cmd);
@@ -908,8 +923,8 @@ void Renderer2D::endFrame() {
     m_frameIndex = (m_frameIndex + 1) % kFramesInFlight;
 }
 
-void Renderer2D::recordBatches(VkCommandBuffer cmd, const std::vector<Batch>& batches, bool lightPass) {
-    if (batches.empty()) return;
+void Renderer2D::recordBatches(VkCommandBuffer cmd, const Batch* batches, size_t count, bool lightPass) {
+    if (count == 0) return;
     FrameResources& f = m_frames[m_frameIndex];
     VkDeviceSize offset = 0;
     vkCmdBindVertexBuffers(cmd, 0, 1, &f.vertexBuffer, &offset);
@@ -923,7 +938,7 @@ void Renderer2D::recordBatches(VkCommandBuffer cmd, const std::vector<Batch>& ba
     VkPipeline bound = VK_NULL_HANDLE;
     uint32_t boundClip = 0;  // the caller set the full-target scissor
     VkExtent2D extent = m_swapchain->extent();
-    for (const Batch& b : batches) {
+    for (const Batch& b : std::span(batches, count)) {
         if (!lightPass && b.clip != boundClip) {
             VkRect2D sc = b.clip ? m_clips[b.clip] : VkRect2D{{0, 0}, extent};
             if (sc.extent.width == 0 || sc.extent.height == 0) continue;  // fully clipped away

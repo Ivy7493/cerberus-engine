@@ -66,7 +66,7 @@ Context::~Context() {
 
 // ── Frame ────────────────────────────────────────────────────────────────────
 
-void Context::begin(const Input& input, float dt) {
+void Context::begin(const Input& input, float dt, bool navigation) {
     s_current = this;
     m_input = &input;
     m_dt = dt;
@@ -103,7 +103,12 @@ void Context::begin(const Input& input, float dt) {
     // A text field that vanished (screen changed) can't keep the keyboard.
     if (m_editingId && !contains(m_prevFocusOrder, m_editingId)) m_editingId = 0;
 
-    processNavigation(dt);
+    if (navigation) {
+        processNavigation(dt);
+    } else {
+        m_navActivate = m_back = false;
+        m_navX = 0;
+    }
 
     Clay_UpdateScrollContainers(false, {input.scrollX() * kWheelPixels * m_scale, input.scrollY() * kWheelPixels * m_scale},
                                 dt);

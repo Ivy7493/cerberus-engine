@@ -100,7 +100,10 @@ public:
     Context(const Context&) = delete;
     Context& operator=(const Context&) = delete;
 
-    void begin(const Input& input, float dt);
+    // `navigation` false: keys and pad don't move focus or activate this
+    // frame (say, while the game waits for a key to rebind). The mouse
+    // still works.
+    void begin(const Input& input, float dt, bool navigation = true);
     void end();
 
     Theme theme;
@@ -123,6 +126,8 @@ public:
     // Tint the image here, not with backgroundColor: Clay draws an
     // element's background over its image.
     Clay_ImageElementConfig image(TextureId texture, const glm::vec4& tint = glm::vec4(1.0f));
+    // Pointer over this element (last frame's layout), without registering it.
+    bool isHovered(Clay_ElementId id) const { return Clay_PointerOver(id); }
     // Draw anything inside a laid-out box (screen pixels), in layout order.
     Clay_CustomElementConfig custom(std::function<void(Renderer2D&, const Rect&)> draw);
     // Vertical scroll container: CLAY(id, { ..., .clip = ui.scrollY() }).
@@ -225,9 +230,12 @@ bool button(Clay_ElementId id, std::string_view label, const ButtonOptions& opti
 bool checkbox(Clay_ElementId id, std::string_view label, bool& value);
 bool sliderFloat(Clay_ElementId id, std::string_view label, float& value, float min, float max,
                  const char* format = "%.2f");
-bool sliderInt(Clay_ElementId id, std::string_view label, int& value, int min, int max);
+bool sliderInt(Clay_ElementId id, std::string_view label, int& value, int min, int max, const char* format = "%d");
 // Single line. Click or activate to edit; Enter, Escape, pad B or clicking
 // elsewhere stops. Ctrl+V pastes. `maxBytes` caps the UTF-8 length.
 bool textField(Clay_ElementId id, std::string& value, std::string_view hint = {}, size_t maxBytes = 64);
+// A small floating note under `anchor` (drawn above everything). Call when
+// you want it shown, e.g. while the anchor is hovered or nav-focused.
+void tooltip(Clay_ElementId anchor, std::string_view text);
 
 }  // namespace eng::ui

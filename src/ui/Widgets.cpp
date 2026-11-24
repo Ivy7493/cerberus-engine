@@ -201,12 +201,12 @@ bool sliderFloat(Clay_ElementId id, std::string_view label, float& value, float 
     return true;
 }
 
-bool sliderInt(Clay_ElementId id, std::string_view label, int& value, int min, int max) {
+bool sliderInt(Clay_ElementId id, std::string_view label, int& value, int min, int max, const char* format) {
     Context& ui = *Context::current();
     int range = max - min;
     float t = range != 0 ? float(value - min) / float(range) : 0.0f;
     float step = range > 0 ? 1.0f / float(std::min(range, 20)) : 0.0f;  // whole numbers; ≤ 20 presses end to end
-    if (!slider(id, label, t, step, ui.fmt("%d", value))) return false;
+    if (!slider(id, label, t, step, ui.fmt(format, value))) return false;
     int v = min + int(std::lround(t * float(range)));
     if (v == value) return false;
     value = v;
@@ -298,6 +298,29 @@ bool textField(Clay_ElementId id, std::string& value, std::string_view hint, siz
     }
     close();
     return changed;
+}
+
+void tooltip(Clay_ElementId anchor, std::string_view s) {
+    Context& ui = *Context::current();
+    const Theme& th = ui.theme;
+    Clay_ElementDeclaration d{};
+    auto padX = uint16_t(ui.px(12)), padY = uint16_t(ui.px(7));
+    d.layout.sizing = {CLAY_SIZING_FIT(0, ui.px(420)), CLAY_SIZING_FIT(0)};
+    d.layout.padding = {padX, padX, padY, padY};
+    d.backgroundColor = color(th.field * glm::vec4(1, 1, 1, 0.97f));
+    d.cornerRadius = radius(ui.px(th.radius));
+    d.floating.offset = {0.0f, ui.px(6)};
+    d.floating.parentId = anchor.id;
+    d.floating.zIndex = 1000;
+    d.floating.attachPoints = {CLAY_ATTACH_POINT_LEFT_TOP, CLAY_ATTACH_POINT_LEFT_BOTTOM};
+    d.floating.pointerCaptureMode = CLAY_POINTER_CAPTURE_MODE_PASSTHROUGH;
+    d.floating.attachTo = CLAY_ATTACH_TO_ELEMENT_WITH_ID;
+    d.border = border(th.accent * glm::vec4(1, 1, 1, 0.5f), std::max(1.0f, ui.px(1)));
+    openAuto(d);
+    TextStyle ts;
+    ts.small = true;
+    text(s, ts);
+    close();
 }
 
 }  // namespace eng::ui

@@ -187,6 +187,11 @@ public:
     void setUiScale(float scale);
     float uiScale() const { return m_uiScale; }
 
+    // Everything drawn after this call (this frame) goes on top of Dear
+    // ImGui instead of under it — for eng::ui screens that must cover ImGui
+    // ones while both exist. Once per frame; later calls are ignored.
+    void beginAboveImGui();
+
     // Writes the next presented frame (sprites + ImGui) to `path` as PNG.
     void requestScreenshot(const std::string& path) { m_screenshotPath = path; }
 
@@ -245,7 +250,7 @@ private:
     void destroyLightmaps();
     void pushVertices(const Vertex* v, TextureId texture, BlendMode blend, Space space);
     void pushQuad(const glm::vec2 (&p)[4], const glm::vec4& color, Space space);  // untextured, any convex quad
-    void recordBatches(VkCommandBuffer cmd, const std::vector<Batch>& batches, bool lightPass);
+    void recordBatches(VkCommandBuffer cmd, const Batch* batches, size_t count, bool lightPass);
     void createFrameResources();
     void createIndexBuffer();
     void initImGui(const Options& options);
@@ -293,6 +298,7 @@ private:
     std::vector<Texture> m_textures;
     std::vector<Vertex> m_vertices;
     std::vector<Batch> m_batches;
+    size_t m_aboveImGui = SIZE_MAX;  // index of the first batch drawn after ImGui (SIZE_MAX: none)
     std::vector<VkRect2D> m_clips;       // this frame's clip rects; [0] is a placeholder for "none"
     std::vector<uint32_t> m_clipStack;  // indices into m_clips
     std::vector<std::unique_ptr<Font>> m_fonts;
