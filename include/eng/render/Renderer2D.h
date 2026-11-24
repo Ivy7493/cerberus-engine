@@ -246,6 +246,10 @@ private:
         return false;
     }
     uint32_t m_droppedQuads = 0;
+    // kWhite/kCircle/kGlow packed into one texture (createBuiltinTextures):
+    // the slot draws use, and each one's rect in it (x, y, w, h in UV).
+    TextureId m_builtinAtlas = kWhite;
+    glm::vec4 m_builtinUv[3]{};
     float m_waitMs = 0.0f;
     FrameStats m_lastStats;
 
@@ -256,7 +260,8 @@ private:
     VkPipeline createPipeline(VkRenderPass pass, BlendMode blend);
     void createLightmaps();
     void destroyLightmaps();
-    void pushVertices(const Vertex* v, TextureId texture, BlendMode blend, Space space);
+    void pushVertices(const Vertex* v, TextureId texture, BlendMode blend, Space space);  // maps builtins into their atlas
+    void appendQuad(const Vertex* v, TextureId texture, BlendMode blend, Space space);
     void pushQuad(const glm::vec2 (&p)[4], const glm::vec4& color, Space space);  // untextured, any convex quad
     void recordBatches(VkCommandBuffer cmd, const std::vector<Batch>& batches, bool lightPass);
     void createFrameResources();

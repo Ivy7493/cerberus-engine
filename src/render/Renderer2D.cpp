@@ -523,6 +523,30 @@ void Renderer2D::createBuiltinTextures() {
     }
     TextureId g = createTexture(glow.data(), kGlowSize, kGlowSize);
     if (w != kWhite || c != kCircle || g != kGlow) throw std::logic_error("builtin texture ids out of order");
+
+    // The three of them in one texture too, which is what actually gets
+    // drawn (pushVertices remaps their UVs), so rects, circles, glows,
+    // triangles and UI shapes batch together instead of each switch of
+    // shape starting a draw call. Nearest filtering, so the 2 px transparent
+    // gaps keep neighbours from bleeding; the glow's and disc's own rims are
+    // transparent anyway. Layout: glow (0,0) 128², disc (130,0) 64², white
+    // (130,66) 4².
+    constexpr int kAtlasW = 196, kAtlasH = 128;
+    std::vector<uint8_t> atlas(size_t(kAtlasW) * kAtlasH * 4, 0);
+    auto blit = [&](const std::vector<uint8_t>& src, int size, int ox, int oy) {
+        for (int y = 0; y < size; ++y)
+            std::memcpy(&atlas[(size_t(oy + y) * kAtlasW + ox) * 4], &src[size_t(y) * size * 4], size_t(size) * 4);
+    };
+    blit(glow, kGlowSize, 0, 0);
+    blit(disc, kSize, 130, 0);
+    blit(std::vector<uint8_t>(4 * 4 * 4, 255), 4, 130, 66);
+    m_builtinAtlas = createTexture(atlas.data(), kAtlasW, kAtlasH);
+    auto rect = [&](int x, int y, int w, int h) {
+        return glm::vec4(float(x) / kAtlasW, float(y) / kAtlasH, float(w) / kAtlasW, float(h) / kAtlasH);
+    };
+    m_builtinUv[kWhite] = rect(132, 68, 0, 0);  // the block's centre: every UV maps there
+    m_builtinUv[kCircle] = rect(130, 0, kSize, kSize);
+    m_builtinUv[kGlow] = rect(0, 0, kGlowSize, kGlowSize);
 }
 
 // ── Textures ─────────────────────────────────────────────────────────────────
@@ -588,19 +612,43 @@ void Renderer2D::draw(const Sprite& s) {
         float c = std::cos(s.rotation), sn = std::sin(s.rotation);
         for (auto& p : corners) p = {p.x * c - p.y * sn, p.x * sn + p.y * c};
     }
-    glm::vec2 uvs[4] = {{s.uv.x, s.uv.y}, {s.uv.z, s.uv.y}, {s.uv.z, s.uv.w}, {s.uv.x, s.uv.w}};
+    // A builtin's UV rect maps into the shared atlas once here, rather than
+    // per vertex in pushVertices (most quads are sprites).
+    TextureId tex = s.texture < m_textures.size() ? s.texture : kWhite;
+    glm::vec4 uv = s.uv;
+    if (tex <= kGlow && m_builtinAtlas != kWhite) {
+        const glm::vec4& r = m_builtinUv[tex];
+        uv = {r.x + uv.x * r.z, r.y + uv.y * r.w, r.x + uv.z * r.z, r.y + uv.w * r.w};
+        tex = m_builtinAtlas;
+    }
+    glm::vec2 uvs[4] = {{uv.x, uv.y}, {uv.z, uv.y}, {uv.z, uv.w}, {uv.x, uv.w}};
     Vertex v[4];
     for (int i = 0; i < 4; ++i) v[i] = {s.pos + corners[i], uvs[i], s.color};
-    pushVertices(v, s.texture, s.blend, s.space);
+    appendQuad(v, tex, s.blend, s.space);
 }
 
 // One quad's worth of vertices onto the scene's or (between beginLights and
 // endLights) the lightmap's batch list; both index the same vertex buffer.
 void Renderer2D::pushVertices(const Vertex* v, TextureId texture, BlendMode blend, Space space) {
+    TextureId tex = texture < m_textures.size() ? texture : kWhite;
+    if (tex <= kGlow && m_builtinAtlas != kWhite) {  // a builtin: its place in the shared atlas
+        Vertex q[4];
+        std::memcpy(q, v, sizeof q);
+        const float ox = m_builtinUv[tex].x, oy = m_builtinUv[tex].y, sx = m_builtinUv[tex].z, sy = m_builtinUv[tex].w;
+        for (Vertex& x : q) {
+            x.uv.x = ox + x.uv.x * sx;
+            x.uv.y = oy + x.uv.y * sy;
+        }
+        appendQuad(q, m_builtinAtlas, blend, space);
+        return;
+    }
+    appendQuad(v, tex, blend, space);
+}
+
+// The quad as given (UVs already in `tex`), into the current batch or a new one.
+void Renderer2D::appendQuad(const Vertex* v, TextureId tex, BlendMode blend, Space space) {
     auto firstIndex = static_cast<uint32_t>(m_vertices.size() / 4 * 6);
     m_vertices.insert(m_vertices.end(), v, v + 4);
-
-    TextureId tex = texture < m_textures.size() ? texture : kWhite;
     // Clips are a screen/UI thing; the lightmap pass ignores them.
     uint32_t clip = m_inLights || m_clipStack.empty() ? 0 : m_clipStack.back();
     std::vector<Batch>& batches = m_inLights ? m_lightBatches : m_batches;
