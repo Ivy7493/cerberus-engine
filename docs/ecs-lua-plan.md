@@ -1,6 +1,6 @@
 # ECS + Lua plan
 
-Status: phase 1 in progress (branch `ecs-lua`).
+Status: phase 1 done, phase 2 next (branch `ecs-lua`).
 
 ## Decisions
 
@@ -50,7 +50,7 @@ return {
 - **Command buffer:** spawn/destroy during a system run is deferred to between systems.
 - **Component registry** (the core of everything): name, size, fields (name, offset, type, net
   encoding, replicated?, interpolated?). Drives Lua field access, prefab loading/validation,
-  snapshots/net, saves, and an ImGui inspector.
+  snapshots/net, saves, and an eng::ui inspector.
 
 ## Lua
 
