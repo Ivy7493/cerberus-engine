@@ -62,6 +62,15 @@ const lua_sources = [_][]const u8{
     "ltablib.c", "lutf8lib.c",
 };
 const lua_public_headers = [_][]const u8{ "lua.h", "luaconf.h", "lauxlib.h", "lualib.h" };
+/// The tarball's headers, minus the patched luaconf.h.
+const lua_all_headers = [_][]const u8{
+    "lapi.h",    "lauxlib.h", "lcode.h",   "lctype.h",  "ldebug.h",  "ldo.h",     "lfunc.h",
+    "lgc.h",     "ljumptab.h", "llex.h",   "llimits.h", "lmem.h",    "lobject.h", "lopcodes.h",
+    "lopnames.h", "lparser.h", "lprefix.h", "lstate.h", "lstring.h", "ltable.h",  "ltm.h",
+    "lua.h",     "lualib.h",  "lundump.h", "lvm.h",     "lzio.h",
+};
+/// Files third_party/lua replaces (see its headers' "eng:" notes).
+const lua_patched = [_][]const u8{ "luaconf.h", "lstrlib.c" };
 
 /// Lua is compiled as C++: errors become exceptions, so they unwind C++
 /// frames (destructors run) in bindings instead of longjmp()ing past them.
@@ -196,8 +205,9 @@ pub fn build(b: *std.Build) void {
 
     // ── Lua 5.4 (built into eng; headers installed under lua/) ──────────────
     const lua = b.dependency("lua", .{});
-    const lua_headers = luaHeaders(b, lua);
-    addLua(mod, lua, lua_headers);
+    const lua_src = luaSources(b, lua);
+    const lua_headers = luaHeaders(b, lua_src);
+    addLua(mod, lua_src, lua_headers);
 
     // eng-luac: the bytecode compiler for release scripts, a host tool.
     const luac_mod = b.createModule(.{
@@ -206,7 +216,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
         .link_libcpp = true,
     });
-    addLua(luac_mod, lua, lua_headers);
+    addLua(luac_mod, lua_src, lua_headers);
     luac_mod.addCSourceFile(.{ .file = b.path("tools/eng_luac.cpp"), .flags = &cxx_flags });
     b.installArtifact(b.addExecutable(.{ .name = "eng-luac", .root_module = luac_mod }));
 
@@ -300,17 +310,26 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_luaecs.step);
 }
 
-/// Lua's public headers under a lua/ prefix (<lua/lua.h>), as games see them.
-fn luaHeaders(b: *std.Build, lua: *std.Build.Dependency) *std.Build.Step.WriteFile {
+/// Lua's sources as eng builds them: the tarball's, with third_party/lua's
+/// patched luaconf.h (float numbers) and lstrlib.c (pattern matching on the
+/// instruction budget) in place of its own. One directory, because Lua's
+/// files include each other with quotes (their own directory first).
+fn luaSources(b: *std.Build, lua: *std.Build.Dependency) *std.Build.Step.WriteFile {
     const wf = b.addWriteFiles();
-    for (lua_public_headers) |h| _ = wf.addCopyFile(lua.path(b.fmt("src/{s}", .{h})), b.fmt("lua/{s}", .{h}));
+    for (lua_sources ++ lua_all_headers) |f| _ = wf.addCopyFile(lua.path(b.fmt("src/{s}", .{f})), f);
+    for (lua_patched) |f| _ = wf.addCopyFile(b.path(b.fmt("third_party/lua/{s}", .{f})), f);
     return wf;
 }
 
-fn addLua(m: *std.Build.Module, lua: *std.Build.Dependency, headers: *std.Build.Step.WriteFile) void {
-    m.addCSourceFiles(.{ .root = lua.path("src"), .files = &lua_sources, .flags = &lua_flags, .language = .cpp });
-    m.addCSourceFile(.{ .file = m.owner.path("third_party/lua/lstrlib.c"), .flags = &lua_flags, .language = .cpp });
-    m.addIncludePath(lua.path("src"));  // the patched lstrlib.c's "lua.h", "lprefix.h"
+/// Lua's public headers under a lua/ prefix (<lua/lua.h>), as games see them.
+fn luaHeaders(b: *std.Build, src: *std.Build.Step.WriteFile) *std.Build.Step.WriteFile {
+    const wf = b.addWriteFiles();
+    for (lua_public_headers) |h| _ = wf.addCopyFile(src.getDirectory().path(b, h), b.fmt("lua/{s}", .{h}));
+    return wf;
+}
+
+fn addLua(m: *std.Build.Module, src: *std.Build.Step.WriteFile, headers: *std.Build.Step.WriteFile) void {
+    m.addCSourceFiles(.{ .root = src.getDirectory(), .files = &(lua_sources ++ [_][]const u8{"lstrlib.c"}), .flags = &lua_flags, .language = .cpp });
     m.addIncludePath(headers.getDirectory());
 }
 
@@ -320,6 +339,10 @@ fn addLua(m: *std.Build.Module, lua: *std.Build.Dependency, headers: *std.Build.
 /// release; in dev, point eng::Scripts at the source tree instead.
 pub fn compileScripts(b: *std.Build, eng_dep: *std.Build.Dependency, src_dir: std.Build.LazyPath) std.Build.LazyPath {
     const run = b.addRunArtifact(eng_dep.artifact("eng-luac"));
+    // Every build: zig's cache doesn't see files added to (or removed from)
+    // the directory, so a new script would be missing from the output (and
+    // from release packages). Compiling a few dozen small files is cheap.
+    run.has_side_effects = true;
     run.addDirectoryArg(src_dir);
     return run.addOutputDirectoryArg("scripts");
 }

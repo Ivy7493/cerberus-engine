@@ -95,6 +95,17 @@ static void testEntities(const Registry& r) {
     CHECK(addThrew && !w.has<Health>(d));
     CHECK(!w.alive(kNullEntity) && w.entityAt(entitySlot(d)) == d);
 
+    // Reserved components don't move when more are added.
+    {
+        World rw(r, {.maxEntities = 64});
+        rw.reserveComponents<Health>(16);
+        CHECK(rw.reservedCount(r.id<Health>()) >= 16);
+        Entity first = rw.spawn();
+        Health* held = &rw.add<Health>(first, Health{7, 0.0f});
+        for (int i = 0; i < 15; ++i) rw.add<Health>(rw.spawn());
+        CHECK(rw.get<Health>(first) == held && held->hp == 7);
+    }
+
     // Freed slots are reused first-in, first-out.
     World f(r, {.maxEntities = 4});
     Entity e[4];

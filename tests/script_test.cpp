@@ -6,6 +6,7 @@
 #include <lua/lauxlib.h>
 #include <lua/lua.h>
 
+#include <cmath>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -91,6 +92,10 @@ int main(int argc, char** argv) {
     CHECK(s.require(base, "util.math2"));
     CHECK(lua_istable(s.L(), -1));
     lua_settop(s.L(), 0);
+
+    // ── Numbers are float (third_party/lua/luaconf.h), like the game sims' ──
+    CHECK(eval(s, base, "return 16777216.0 + 1.0 == 16777216.0") == "true");  // 2^24 + 1 isn't a float
+    CHECK(eval(s, base, "return 1 << 40") == "1099511627776");  // integers are still 64-bit
 
     // ── Sandbox ──
     CHECK(eval(s, mod, "return io == nil and os == nil and debug == nil and package == nil and dofile == nil "
