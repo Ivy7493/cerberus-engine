@@ -240,7 +240,7 @@ static void generateMipmaps(const VulkanContext& context, VkCommandPool commandP
 
 TextureResource createTextureFromPixels(const VulkanContext& context, VkCommandPool commandPool,
                                         const uint8_t* pixels, uint32_t width, uint32_t height,
-                                        bool generateMips) {
+                                        bool generateMips, bool linearFilter) {
     VkDeviceSize imageSize = static_cast<VkDeviceSize>(width) * height * 4;
 
     VkBuffer stagingBuf;
@@ -294,14 +294,14 @@ TextureResource createTextureFromPixels(const VulkanContext& context, VkCommandP
 
     VkSamplerCreateInfo si{};
     si.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    si.magFilter    = VK_FILTER_NEAREST;  // crisp up close, matches the low-poly art style
+    si.magFilter    = linearFilter ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;  // nearest: crisp up close, matches the low-poly art style
     // LINEAR (not NEAREST) minification + a real mip chain: distant floor
     // tiles/textures sample a properly downsampled mip instead of
     // skipping pixels in the full-res one, which is what caused the
     // shimmer/moire this was added to fix. Falls back to NEAREST when
     // mipLevels is 1 (generateMips=false, or the format/device couldn't
     // blit) so nothing changes for UI art.
-    si.minFilter    = mipLevels > 1 ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+    si.minFilter    = mipLevels > 1 || linearFilter ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
     si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;

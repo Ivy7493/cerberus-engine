@@ -48,7 +48,7 @@ struct TextureResource {
 // is always drawn at a fixed/known scale and has no "far away" case.
 TextureResource createTextureFromPixels(const VulkanContext& context, VkCommandPool commandPool,
                                         const uint8_t* pixels, uint32_t width, uint32_t height,
-                                        bool generateMips = true);
+                                        bool generateMips = true, bool linearFilter = false);
 
 void destroyTexture(const VulkanContext& context, TextureResource& res);
 

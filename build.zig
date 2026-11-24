@@ -30,6 +30,11 @@ const eng_sources = [_][]const u8{
     "src/render/VulkanUtils.cpp",
     "src/render/Renderer2D.cpp",
     "src/render/StbImage.cpp",
+    "src/render/Text.cpp",
+    "src/render/Shapes.cpp",
+    "src/render/DrawList.cpp",
+    "src/ui/Ui.cpp",
+    "src/ui/Widgets.cpp",
     "src/net/UdpSocket.cpp",
     "src/net/UdpTransport.cpp",
     "src/net/SteamPlatform.cpp",
@@ -56,15 +61,6 @@ const lua_public_headers = [_][]const u8{ "lua.h", "luaconf.h", "lauxlib.h", "lu
 /// state hashes differently, so pairs() order would differ between server
 /// and clients.
 const lua_flags = [_][]const u8{ "-std=c++20", "-Dluai_makeseed(L)=0u", "-w" };
-
-const imgui_sources = [_][]const u8{
-    "imgui.cpp",
-    "imgui_draw.cpp",
-    "imgui_tables.cpp",
-    "imgui_widgets.cpp",
-    "backends/imgui_impl_glfw.cpp",
-    "backends/imgui_impl_vulkan.cpp",
-};
 
 const glfw_common = [_][]const u8{
     "context.c",     "init.c",         "input.c",       "monitor.c",
@@ -135,10 +131,7 @@ pub fn build(b: *std.Build) void {
 
     for (pc_headers_common) |pkg| addPkgConfigIncludes(b, mod, pkg);
 
-    const cxx_flags = [_][]const u8{
-        "-std=c++20",
-        "-Wno-nontrivial-memcall", // imgui's memset(this, ...) constructors
-    };
+    const cxx_flags = [_][]const u8{"-std=c++20"};
 
     // ── GLFW 3.4, built from source ──────────────────────────────────────────
     // Its own library: GLFW's sources refuse the header-option macros
@@ -175,11 +168,12 @@ pub fn build(b: *std.Build) void {
         for ([_][]const u8{ "dl", "pthread", "m" }) |lib| mod.linkSystemLibrary(lib, .{});
     }
 
-    // ── Dear ImGui (built into eng; games include <imgui.h> through it) ──────
-    const imgui = b.dependency("imgui", .{});
-    mod.addCSourceFiles(.{ .root = imgui.path(""), .files = &imgui_sources, .flags = &cxx_flags });
-    mod.addIncludePath(imgui.path(""));
-    mod.addIncludePath(imgui.path("backends"));
+    // ── Clay (UI layout; games use its CLAY() macros through <clay.h>) ───────
+    // Its implementation is plain C99, compiled once here; the header also
+    // compiles as C++20, which is how eng::ui and games include it.
+    const clay = b.dependency("clay", .{});
+    mod.addCSourceFile(.{ .file = b.path("src/ui/Clay.c"), .flags = &.{ "-std=c99", "-w" } });
+    mod.addIncludePath(clay.path(""));
 
     // ── Shaders → SPIR-V embedded as C arrays (no runtime shader files) ──────
     const gen = b.addWriteFiles();
@@ -210,6 +204,13 @@ pub fn build(b: *std.Build) void {
 
     // ── eng itself ───────────────────────────────────────────────────────────
     mod.addCSourceFiles(.{ .files = &eng_sources, .flags = &cxx_flags });
+    // stb_truetype rasterizes font atlases: its own library, always built
+    // ReleaseFast, or in Debug a new text size stalls a frame for ~80ms while
+    // it bakes (a per-file -O2 flag loses to zig's Debug flags).
+    const stbtt_mod = b.createModule(.{ .target = target, .optimize = .ReleaseFast, .link_libc = true, .link_libcpp = true });
+    stbtt_mod.addCSourceFile(.{ .file = b.path("src/render/StbTruetype.cpp"), .flags = &.{ "-std=c++20", "-w" } });
+    stbtt_mod.addIncludePath(b.path("third_party"));
+    mod.linkLibrary(b.addLibrary(.{ .name = "eng_stbtt", .linkage = .static, .root_module = stbtt_mod }));
     // miniaudio's implementation TU trips plenty of warnings; keep eng quiet.
     mod.addCSourceFile(.{ .file = b.path("src/audio/Audio.cpp"), .flags = &(cxx_flags ++ .{"-w"}) });
     mod.addIncludePath(b.path("include"));
@@ -220,10 +221,31 @@ pub fn build(b: *std.Build) void {
     lib.installHeadersDirectory(b.path("include/eng"), "eng", .{});
     lib.installHeader(config_h, "eng/config.h");
     lib.installHeadersDirectory(lua_headers.getDirectory().path(b, "lua"), "lua", .{});
-    lib.installHeadersDirectory(imgui.path(""), "", .{ .include_extensions = &.{".h"} });
     lib.installHeadersDirectory(glfw.path("include/GLFW"), "GLFW", .{});
+    lib.installHeader(clay.path("clay.h"), "clay.h");
     if (steam) lib.installHeadersDirectory(b.path(steam_sdk ++ "/public/steam"), "steam", .{});
     b.installArtifact(lib);
+
+    // ── ui-demo: eng::ui's showcase and visual check (Linux dev builds) ─────
+    //   zig build ui-demo [-- --screenshot out.png] [-- --fonts dir]
+    // Linked like link() does for games, but against this build's libeng.
+    if (!is_windows) {
+        const demo_mod = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true, .link_libcpp = true });
+        demo_mod.addCSourceFile(.{ .file = b.path("examples/ui_demo.cpp"), .flags = &cxx_flags });
+        demo_mod.linkLibrary(lib);
+        addPublicMacros(demo_mod, false);
+        for (pc_headers_common) |pkg| addPkgConfigIncludes(b, demo_mod, pkg);
+        if (steam) {
+            demo_mod.addObjectFile(b.path(steamLib(false, .link)));
+            demo_mod.addRPath(b.path(steam_sdk ++ "/redistributable_bin/linux64"));
+        }
+        demo_mod.addObjectFile(.{ .cwd_relative = vulkanLoader(b) });
+        const demo = b.addExecutable(.{ .name = "ui-demo", .root_module = demo_mod });
+        const run_demo = b.addRunArtifact(demo);
+        run_demo.setCwd(b.path("."));
+        run_demo.addPassthruArgs();
+        b.step("ui-demo", "Build and run eng::ui's demo").dependOn(&run_demo.step);
+    }
 
     // ── zig build test ───────────────────────────────────────────────────────
     const test_mod = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true, .link_libcpp = true });
