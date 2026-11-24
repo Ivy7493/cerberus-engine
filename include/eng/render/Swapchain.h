@@ -21,8 +21,8 @@ public:
     //
     // `srgb` picks an sRGB surface format (correct for a lit 3D renderer
     // writing linear color) vs plain UNORM (what a 2D sprite renderer wants:
-    // texture/vertex colors pass through untouched, and Dear ImGui's colors
-    // aren't washed out). `depth` skips the depth buffer entirely for
+    // texture/vertex colors pass through untouched, and UI colors aren't
+    // washed out). `depth` skips the depth buffer entirely for
     // renderers that never depth-test.
     Swapchain(VulkanContext& context, GLFWwindow* window,
               VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT,

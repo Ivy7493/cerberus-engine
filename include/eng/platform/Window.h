@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
+#include <vector>
 
 struct GLFWwindow;
 
@@ -35,6 +37,17 @@ public:
 
     void setTitle(const std::string& title);
 
+    // Event-driven input that polling can't see, gathered between
+    // pollEvents() calls and drained by Input::update(): typed text
+    // (Unicode codepoints, layout- and IME-aware), the scroll wheel, and key
+    // presses including OS auto-repeat (for text editing).
+    struct EventInput {
+        std::vector<uint32_t> chars;
+        std::vector<int> keyRepeats;  // GLFW_KEY_* for each press or repeat
+        double scrollX = 0.0, scrollY = 0.0;
+    };
+    EventInput takeEventInput();
+
 private:
     GLFWwindow* m_window = nullptr;
     bool m_resized = false;
@@ -42,7 +55,12 @@ private:
     // Windowed-mode geometry saved on entering fullscreen, restored on exit.
     int m_savedX = 0, m_savedY = 0, m_savedW = 0, m_savedH = 0;
 
+    EventInput m_events;
+
     static void framebufferResizeCallback(GLFWwindow* window, int width, int height);
+    static void charCallback(GLFWwindow* window, unsigned int codepoint);
+    static void scrollCallback(GLFWwindow* window, double dx, double dy);
+    static void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods);
 };
 
 }  // namespace eng

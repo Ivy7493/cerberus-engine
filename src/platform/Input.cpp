@@ -1,7 +1,10 @@
 #include "eng/platform/Input.h"
 
+#include "eng/platform/Window.h"
+
 #include <GLFW/glfw3.h>
 
+#include <algorithm>
 #include <cmath>
 
 namespace eng {
@@ -30,6 +33,19 @@ void Input::update(GLFWwindow* window) {
     glfwGetFramebufferSize(window, &fw, &fh);
     m_mouseX = cx * (ww > 0 ? double(fw) / ww : 1.0);
     m_mouseY = cy * (wh > 0 ? double(fh) / wh : 1.0);
+
+    // Event-driven input, collected by the Window (its GLFW user pointer).
+    m_typed.clear();
+    m_keyRepeats.clear();
+    m_scrollX = m_scrollY = 0.0f;
+    if (auto* w = static_cast<Window*>(glfwGetWindowUserPointer(window))) {
+        Window::EventInput ev = w->takeEventInput();
+        m_typed = std::move(ev.chars);
+        m_keyRepeats = std::move(ev.keyRepeats);
+        m_scrollX = static_cast<float>(ev.scrollX);
+        m_scrollY = static_cast<float>(ev.scrollY);
+        anyKey |= !m_typed.empty();
+    }
 
     bool anyPad = false;
     for (int i = 0; i < kMaxGamepads; ++i) {
@@ -62,6 +78,10 @@ void Input::update(GLFWwindow* window) {
 bool Input::keyDown(int key) const { return key >= 0 && key < kMaxKeys && m_keys[key]; }
 bool Input::keyPressed(int key) const { return keyDown(key) && !m_prevKeys[key]; }
 bool Input::keyReleased(int key) const { return key >= 0 && key < kMaxKeys && !m_keys[key] && m_prevKeys[key]; }
+
+bool Input::keyTyped(int key) const {
+    return std::find(m_keyRepeats.begin(), m_keyRepeats.end(), key) != m_keyRepeats.end();
+}
 
 bool Input::mouseDown(int button) const { return button >= 0 && button < kMaxMouseButtons && m_mouse[button]; }
 bool Input::mousePressed(int button) const { return mouseDown(button) && !m_prevMouse[button]; }
