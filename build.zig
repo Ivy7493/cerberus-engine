@@ -339,6 +339,10 @@ fn addLua(m: *std.Build.Module, src: *std.Build.Step.WriteFile, headers: *std.Bu
 /// release; in dev, point eng::Scripts at the source tree instead.
 pub fn compileScripts(b: *std.Build, eng_dep: *std.Build.Dependency, src_dir: std.Build.LazyPath) std.Build.LazyPath {
     const run = b.addRunArtifact(eng_dep.artifact("eng-luac"));
+    // Every build: zig's cache doesn't see files added to (or removed from)
+    // the directory, so a new script would be missing from the output (and
+    // from release packages). Compiling a few dozen small files is cheap.
+    run.has_side_effects = true;
     run.addDirectoryArg(src_dir);
     return run.addOutputDirectoryArg("scripts");
 }
